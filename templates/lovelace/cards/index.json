@@ -1,0 +1,21 @@
+{
+  "_help": "Манифест всех карточек. Каждый файл в tools/cards/ вызывает window.Lovelace.register(type, spec) и (при необходимости) Lovelace.util.css(...). Первый рендер панели ждёт загрузки этих файлов.",
+  "cards": [
+    "switch.js",
+    "slider.js",
+    "sensor.js",
+    "text.js",
+    "button.js",
+    "thermostat.js",
+    "cover.js",
+    "rgb.js",
+    "light.js",
+    "camera.js",
+    "spacer.js",
+    "gauge.js",
+    "webrtc.js",
+    "weather.js",
+    "calendar.js",
+    "clock.js"
+  ]
+}

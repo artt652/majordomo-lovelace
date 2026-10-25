@@ -1,0 +1,1837 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#10131a">
+<title>Majordomo · Панель</title>
+<!--
+  ============================================================================
+  Majordomo Dashboard (Lovelace-style)  —  htdocs/tools/dashboard.html
+  ============================================================================
+  Полностью автономный файл: vanilla JS, без сборки, без внешних CDN,
+  без localStorage. Работает офлайн (важно для локального Android-устройства).
+  Отдаётся существующим lighttpd + php-cgi. Ядро Majordomo НЕ трогается.
+
+  --- КОНТРАКТ API (реализуется отдельно в dashboard_api.php) --------------
+  GET  dashboard_api.php?op=state
+    ->  {
+          "ok": true,
+          "ts": 1720000000,
+          "rooms": [
+            {
+              "id": "living",
+              "title": "Гостиная",
+              "devices": [
+                {
+                  "id": "HallLamp",           // имя ОБЪЕКТА Majordomo
+                  "title": "Люстра",
+                  "icon": "bulb",             // bulb|power|thermo|droplet|motion|dot
+                  "controls": [
+                    {
+                      "prop": "status",       // имя СВОЙСТВА объекта
+                      "label": "",            // подпись (для нескольких контролов)
+                      "type": "switch",       // switch|slider|sensor|text|button
+                      "value": 1,
+                      "unit": "",             // °C, %, W ...
+                      "min": 0, "max": 100, "step": 1,   // для slider
+                      "readonly": false,
+                      "method": ""            // для type=button: имя МЕТОДА объекта
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+
+  POST dashboard_api.php?op=set     body: {"object":"HallLamp","property":"status","value":1}
+    ->  { "ok": true, "value": 1 }
+        ВАЖНО: запись ДОЛЖНА идти через setGlobal()/свойство объекта,
+        чтобы отработали связанные методы, сцены и история. Прямой
+        UPDATE в таблицу свойств ломает логику Majordomo — так нельзя.
+
+  POST dashboard_api.php?op=method  body: {"object":"HallLamp","method":"toggle","params":{}}
+    ->  { "ok": true }
+  --------------------------------------------------------------------------
+  Пока dashboard_api.php нет — панель сама переключается на демо-данные
+  (баннер вверху). Как только API появится, всё заработает без правок фронта.
+-->
+<style>
+  :root{
+    --bg:#10131a; --surface:#191d27; --raised:#222736; --border:#2b3040;
+    --text:#e6e9f0; --muted:#8b93a7; --faint:#5b6377;
+    --active:#ffb454;            /* тёплый «включено» */
+    --active-soft:#ffb45422;
+    --on-active:#10131a;         /* текст на акцентном фоне */
+    --link:#5ec8d8;              /* холодный интерактив */
+    --ok:#5fd08a; --bad:#ef6f6f;
+    --r:16px; --r-sm:11px;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+  }
+  /* ---- темы (переключаются data-theme на <html>) ---- */
+  :root[data-theme="light"]{
+    --bg:#f4f6f9; --surface:#ffffff; --raised:#eceff4; --border:#dbe0e8;
+    --text:#1e2430; --muted:#5b6472; --faint:#97a0b0;
+    --active:#e8961f; --active-soft:#e8961f22; --on-active:#241500;
+    --link:#1f8aa0; --ok:#2e9e5b; --bad:#d64545;
+  }
+  :root[data-theme="midnight"]{
+    --bg:#0d1120; --surface:#151a2e; --raised:#1f263f; --border:#2b3350;
+    --text:#e4e8f5; --muted:#8b94b5; --faint:#5a6288;
+    --active:#8b7cff; --active-soft:#8b7cff22; --on-active:#0d1120;
+    --link:#6ea8ff; --ok:#5fd08a; --bad:#ef6f6f;
+  }
+  :root[data-theme="ocean"]{
+    --bg:#0a1719; --surface:#112427; --raised:#183238; --border:#234a50;
+    --text:#dff0f0; --muted:#7fa5a8; --faint:#4e7176;
+    --active:#2fd8c3; --active-soft:#2fd8c322; --on-active:#062024;
+    --link:#5ec8d8; --ok:#5fd08a; --bad:#ef6f6f;
+  }
+  :root[data-theme="forest"]{
+    --bg:#0c1410; --surface:#12201a; --raised:#1b2e24; --border:#274236;
+    --text:#dfeee6; --muted:#83a394; --faint:#527266;
+    --active:#4fd18a; --active-soft:#4fd18a22; --on-active:#06140d;
+    --link:#5ec8d8; --ok:#5fd08a; --bad:#ef6f6f;
+  }
+  :root[data-theme="sunset"]{
+    --bg:#160f0f; --surface:#241919; --raised:#33231f; --border:#4a332c;
+    --text:#f2e4df; --muted:#b59289; --faint:#7a564c;
+    --active:#ff7a45; --active-soft:#ff7a4522; --on-active:#1a0d07;
+    --link:#ffb454; --ok:#5fd08a; --bad:#ef6f6f;
+  }
+  :root[data-theme="grape"]{
+    --bg:#120e1c; --surface:#1c1730; --raised:#282041; --border:#3a3059;
+    --text:#e9e3f7; --muted:#a294c4; --faint:#6b5f8c;
+    --active:#c07cff; --active-soft:#c07cff22; --on-active:#120a1e;
+    --link:#8b7cff; --ok:#5fd08a; --bad:#ef6f6f;
+  }
+  :root[data-theme="paper"]{
+    --bg:#f3efe6; --surface:#fffdf8; --raised:#ece6d8; --border:#dcd3c0;
+    --text:#2c2519; --muted:#6b5f4c; --faint:#a99c84;
+    --active:#c8791e; --active-soft:#c8791e22; --on-active:#241500;
+    --link:#1f7a8a; --ok:#2e9e5b; --bad:#c0432e;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  /* тонкие ненавязчивые полосы прокрутки */
+  html{scrollbar-width:thin; scrollbar-color:var(--border) transparent}
+  ::-webkit-scrollbar{width:7px; height:7px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:var(--border); border-radius:8px; border:2px solid transparent; background-clip:padding-box}
+  ::-webkit-scrollbar-thumb:hover{background:var(--faint); background-clip:padding-box}
+  html,body{margin:0}
+  body{
+    background:var(--bg); color:var(--text); font-family:var(--sans);
+    -webkit-font-smoothing:antialiased; line-height:1.4;
+    padding:0 0 env(safe-area-inset-bottom);
+  }
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+  /* ---- шапка ---- */
+  header{
+    position:sticky; top:0; z-index:10;
+    display:flex; align-items:center; gap:12px;
+    padding:14px 16px calc(14px + env(safe-area-inset-top,0)) 16px;
+    padding-top:max(14px,env(safe-area-inset-top,0));
+    background:linear-gradient(180deg,var(--bg) 70%,transparent);
+    backdrop-filter:blur(6px);
+  }
+  .brand{display:flex; align-items:baseline; gap:9px; min-width:0}
+  .brand b{font-size:17px; font-weight:650; letter-spacing:.2px}
+  .brand span{font-size:12px; color:var(--faint)}
+  .spacer{flex:1}
+  .heart{display:flex; align-items:center; gap:7px; font-size:12px; color:var(--muted)}
+  .dot{width:9px; height:9px; border-radius:50%; background:var(--faint); flex:none}
+  .dot.live{background:var(--ok); box-shadow:0 0 0 0 var(--ok); animation:pulse 2.4s infinite}
+  .dot.ws{background:var(--link); box-shadow:0 0 0 0 var(--link); animation:pulse-ws 2.4s infinite}
+  .dot.stale{background:var(--bad)}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 #5fd08a66}70%{box-shadow:0 0 0 7px #5fd08a00}100%{box-shadow:0 0 0 0 #5fd08a00}}
+  @keyframes pulse-ws{0%{box-shadow:0 0 0 0 #5ec8d866}70%{box-shadow:0 0 0 7px #5ec8d800}100%{box-shadow:0 0 0 0 #5ec8d800}}
+  .iconbtn{
+    background:var(--raised); border:1px solid var(--border); color:var(--text);
+    width:38px; height:38px; border-radius:11px; cursor:pointer; flex:none;
+    display:grid; place-items:center; transition:.15s;
+  }
+  .iconbtn:hover{border-color:var(--faint)}
+  .iconbtn:active{transform:scale(.94)}
+  .iconbtn svg{width:19px; height:19px}
+  .iconbtn.spin svg{animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  .banner{
+    margin:0 16px 4px; padding:10px 13px; border-radius:var(--r-sm);
+    background:#3a2f1a; border:1px solid #6b5320; color:#f0d9a8; font-size:13px;
+    display:none;
+  }
+  .banner.show{display:block}
+  #app.demo{filter:blur(3px) grayscale(.35); opacity:.7; pointer-events:none; user-select:none; transition:filter .2s}
+  #toasts{position:fixed; right:12px; bottom:12px; z-index:9000; display:flex; flex-direction:column; gap:8px; max-width:min(360px,86vw); pointer-events:none}
+  .toast{background:var(--surface); border:1px solid var(--border); border-left:3px solid var(--active); border-radius:10px; padding:10px 12px; box-shadow:0 6px 20px rgba(0,0,0,.35); color:var(--text); font-size:13px; line-height:1.35; opacity:0; transform:translateY(8px); transition:opacity .2s,transform .2s; pointer-events:auto}
+  .toast.show{opacity:1; transform:translateY(0)}
+  .toast .t-head{display:flex; justify-content:space-between; gap:8px; margin-bottom:2px}
+  .toast .t-who{font-weight:600; color:var(--active)}
+  .toast .t-time{color:var(--muted,#8a92a6); font-size:11px; flex:0 0 auto}
+  .toast .t-text{word-break:break-word}
+  .bell-badge{position:absolute; top:-4px; right:-4px; min-width:16px; height:16px; padding:0 4px; box-sizing:border-box; background:var(--active); color:var(--on-active,#fff); font-size:10px; line-height:16px; text-align:center; border-radius:8px; font-weight:700}
+  #chatModal{position:fixed; inset:0; z-index:8500; background:rgba(0,0,0,.5); display:none; align-items:flex-end; justify-content:center}
+  #chatModal.show{display:flex}
+  .chat-box{background:var(--surface); width:min(560px,100%); max-height:80vh; border:1px solid var(--border); border-radius:16px 16px 0 0; display:flex; flex-direction:column; overflow:hidden}
+  @media(min-width:600px){ #chatModal{align-items:center} .chat-box{border-radius:16px} }
+  .chat-head{display:flex; align-items:center; justify-content:space-between; padding:12px 14px; border-bottom:1px solid var(--border)}
+  .chat-head b{font-size:15px}
+  .chat-close{background:none; border:0; color:var(--muted); font-size:22px; cursor:pointer; line-height:1}
+  .chat-list{flex:1; overflow-y:auto; padding:10px 14px; display:flex; flex-direction:column; gap:8px}
+  .chat-msg{font-size:13px; line-height:1.4}
+  .chat-msg .cm-head{font-size:11px; color:var(--muted); margin-bottom:1px}
+  .chat-msg .cm-who{color:var(--active); font-weight:600}
+  .chat-empty{color:var(--muted); text-align:center; padding:20px}
+  .chat-input{display:flex; gap:8px; padding:10px 14px; border-top:1px solid var(--border)}
+  .chat-input input{flex:1; background:var(--bg); border:1px solid var(--border); color:var(--text); border-radius:10px; padding:10px 12px; font:inherit; font-size:14px}
+  .chat-input button{background:var(--active); color:var(--on-active,#fff); border:0; border-radius:10px; padding:0 16px; font:inherit; font-weight:600; cursor:pointer}
+
+  /* ---- меню тем ---- */
+  .thememenu{
+    position:fixed; z-index:20; right:12px; top:56px; display:none;
+    background:var(--surface); border:1px solid var(--border); border-radius:12px;
+    padding:6px; box-shadow:0 10px 30px -12px #000a; min-width:170px;
+  }
+  .thememenu.show{display:block}
+  .tm-item{
+    display:flex; align-items:center; gap:10px; width:100%; padding:8px 9px; border-radius:9px;
+    border:1px solid transparent; background:transparent; color:var(--text); font:inherit; font-size:13px;
+    cursor:pointer; text-align:left;
+  }
+  .tm-item:hover{background:var(--raised)}
+  .tm-item.active{border-color:var(--active)}
+  .tm-sw{width:22px; height:22px; border-radius:7px; border:1px solid var(--border); flex:none;
+    display:grid; place-items:center}
+  .tm-sw i{width:9px; height:9px; border-radius:50%; display:block}
+
+  /* ---- вкладки комнат (мобильная навигация) ---- */
+  .tabs{
+    position:sticky; top:0; z-index:9;
+    display:flex; gap:7px; overflow-x:auto; scrollbar-width:none;
+    padding:8px 12px; background:linear-gradient(180deg,var(--bg) 80%,transparent);
+    -webkit-overflow-scrolling:touch;
+  }
+  .tabs::-webkit-scrollbar{display:none}
+  .tabs:empty{display:none}
+  .tab{
+    flex:none; padding:7px 14px; border-radius:999px; cursor:pointer; white-space:nowrap;
+    font-size:13px; color:var(--muted); background:var(--surface);
+    border:1px solid var(--border); transition:.15s; -webkit-tap-highlight-color:transparent;
+  }
+  .tab:active{transform:scale(.96)}
+  .tab.active{color:var(--on-active); background:var(--active); border-color:var(--active); font-weight:600}
+
+  main{padding:6px 12px 40px; max-width:1100px; margin:0 auto}
+
+  /* ---- секция комнаты ---- */
+  .room{margin:18px 4px 6px}
+  .room h2{
+    font-size:12px; font-weight:600; letter-spacing:1.4px; text-transform:uppercase;
+    color:var(--faint); margin:0 0 10px 2px;
+  }
+  .grid{
+    display:grid; gap:11px;
+    grid-template-columns:repeat(auto-fill,minmax(158px,1fr));
+  }
+  .card.w2{grid-column:span 2}
+  .card.w3{grid-column:span 3}
+  .card.w4{grid-column:span 4}
+  .card.wfull{grid-column:1/-1}
+  .card.spacer{grid-column:auto/-1; height:0; min-height:0; background:transparent; border-color:transparent; box-shadow:none; padding:0; align-self:start; pointer-events:none}
+  .card.tall{min-height:210px}
+  .card.xtall{min-height:300px}
+  .card.tall .ctrls,.card.xtall .ctrls{flex:1}
+
+  /* ---- карточка устройства ---- */
+  .card{
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:var(--r); padding:14px; position:relative; overflow:hidden;
+    transition:border-color .2s, box-shadow .3s;
+  }
+  .card.on{
+    border-color:#4a3d22;
+    box-shadow:inset 0 0 0 1px #ffb4541a, 0 0 22px -12px var(--active);
+  }
+  .card.on::before{
+    content:""; position:absolute; inset:0; pointer-events:none;
+    background:radial-gradient(120px 60px at 22px 22px,var(--active-soft),transparent 70%);
+  }
+  .card-top{display:flex; align-items:flex-start; gap:10px; margin-bottom:12px}
+  .card-top.no-obj{align-items:center}
+  .ico{
+    width:34px; height:34px; border-radius:10px; flex:none;
+    display:grid; place-items:center; background:var(--raised); color:var(--muted);
+    transition:.2s;
+  }
+  .card.on .ico{background:var(--active-soft); color:var(--active)}
+  .ico svg{width:19px; height:19px}
+  .titles{min-width:0; flex:1}
+  .titles .t{font-size:14px; font-weight:560; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .titles .s{font-size:11.5px; color:var(--muted); margin-top:2px}
+
+  .ctrls{display:flex; flex-direction:column; gap:11px}
+  .ctrl-label{font-size:11px; color:var(--muted); margin-bottom:5px}
+
+  /* стили карточек — в их файлах cards/*.js (инъекция через Lovelace.util.css) */
+
+  /* ---- модалка графика ---- */
+  .cmodal{position:fixed; inset:0; z-index:50; display:none; align-items:center; justify-content:center;
+    padding:16px; background:rgba(0,0,0,.62)}
+  .cmodal.show{display:flex}
+  .cmodal-box{background:var(--surface); border:1px solid var(--border); border-radius:var(--r);
+    width:100%; max-width:720px; height:min(80vh,560px); display:flex; flex-direction:column; overflow:hidden}
+  .cmodal-head{display:flex; align-items:center; gap:8px; padding:11px 12px; border-bottom:1px solid var(--border)}
+  .cmodal-title{font-size:13.5px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1}
+  .cmodal-ranges{display:flex; gap:5px; flex:none}
+  .crange{padding:5px 10px; border-radius:999px; font-size:12px; cursor:pointer; color:var(--muted);
+    background:var(--raised); border:1px solid var(--border)}
+  .crange.active{color:var(--on-active); background:var(--active); border-color:var(--active); font-weight:600}
+  .cmodal-close{width:32px; height:32px; border-radius:8px; background:var(--raised); border:1px solid var(--border);
+    color:var(--text); cursor:pointer; display:grid; place-items:center; flex:none}
+  .cmodal-body{flex:1; background:#fff}
+  .cmodal-body iframe{width:100%; height:100%; border:0; display:block; background:#fff}
+
+  /* ---- инфо об устройстве ---- */
+  #cardinfo{z-index:45}
+  .ci-boxsize{height:auto; max-height:80vh}
+  .ci-body{overflow-y:auto; padding:10px 12px 16px}
+  .ci-sub{font-family:var(--mono); font-size:11.5px; color:var(--faint); padding:2px 2px 8px}
+  .ci-row{display:flex; align-items:baseline; gap:12px; padding:9px 6px; border-bottom:1px solid var(--border)}
+  .ci-row:last-child{border-bottom:0}
+  .ci-name{flex:1 1 42%; min-width:0; font-size:13px; color:var(--muted); overflow-wrap:anywhere}
+  .ci-val{flex:1 1 58%; min-width:0; font-family:var(--mono); font-size:13px; color:var(--text); text-align:right; overflow-wrap:anywhere}
+  .ci-chart{width:30px; height:30px; flex:none; border-radius:8px; border:1px solid var(--border);
+    background:var(--raised); color:var(--muted); cursor:pointer; display:grid; place-items:center}
+  .ci-chart:hover{color:var(--active); border-color:var(--faint)}
+  .ci-chart svg{width:15px; height:15px}
+  .card-top[data-info]{cursor:pointer; -webkit-tap-highlight-color:transparent; user-select:none; transition:opacity .12s}
+  .card-top[data-info]:active{opacity:.6}
+  .card-i{margin-left:auto; flex:none; align-self:flex-start; color:var(--faint); display:grid; place-items:center; width:20px; height:20px}
+  .card-alive{margin-left:auto; flex:none; align-self:flex-start; width:9px; height:9px; border-radius:50%; margin-top:3px}
+  .card-alive.on{background:#2f9e69}
+  .card-alive.off{background:#c23b3f}
+  .card-i svg{width:16px; height:16px}
+  .card-top[data-info]:hover .card-i{color:var(--active)}
+
+  /* ---- погода: стили в внешнем плагине cards/weather.js ---- */
+
+  /* ---- webrtc камера ---- */
+  .rtc{position:relative; border-radius:10px; overflow:hidden; background:#000; aspect-ratio:16/9; display:flex; cursor:pointer}
+  .rtc img{width:100%; height:100%; object-fit:cover; display:block}
+  .rtc-play{position:absolute; inset:0; margin:auto; width:46px; height:46px; border-radius:50%;
+    background:rgba(0,0,0,.45); display:grid; place-items:center; color:#fff; pointer-events:none}
+  .rtc-play svg{width:22px; height:22px; margin-left:3px}
+  #webrtc .cmodal-body,#webrtc iframe{background:#000}
+
+  /* ---- редактор ---- */
+  .editor{position:fixed; inset:0; z-index:60; background:var(--bg); display:none; flex-direction:column}
+  .editor.show{display:flex}
+  .ed-head{display:flex; align-items:center; gap:10px; padding:14px 16px; border-bottom:1px solid var(--border); flex-wrap:nowrap;
+    padding-top:max(14px,env(safe-area-inset-top,0))}
+  .ed-head b{font-size:16px; flex:none; white-space:nowrap}
+  .ed-actions{display:flex; align-items:center; gap:8px; flex:1 1 0; min-width:0; overflow-x:auto; justify-content:flex-start;
+    -webkit-overflow-scrolling:touch; scrollbar-width:none}
+  .ed-actions::-webkit-scrollbar{display:none}
+  .ed-btn{padding:8px 14px; border-radius:10px; border:1px solid var(--border); background:var(--raised);
+    color:var(--text); font:inherit; font-size:13px; cursor:pointer; flex:none; white-space:nowrap}
+  .ed-btn:active{transform:scale(.97)}
+  .ed-primary{background:var(--active); border-color:var(--active); color:var(--on-active); font-weight:600}
+  .ed-body{flex:1; overflow-y:auto; padding:14px 12px 40px; max-width:900px; margin:0 auto; width:100%}
+
+  .ed-room{background:var(--surface); border:1px solid var(--border); border-radius:var(--r); padding:12px; margin-bottom:14px}
+  .ed-bar{display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap}
+  .ed-barsp{flex:1}
+  .ed-rooms{display:flex; gap:6px; overflow-x:auto; padding-bottom:2px; margin-bottom:8px; -webkit-overflow-scrolling:touch;
+    scrollbar-width:none; -ms-overflow-style:none}
+  .ed-rooms::-webkit-scrollbar{display:none; width:0; height:0}
+  .ed-rchip{flex:none; padding:7px 12px; border-radius:9px; border:1px solid var(--border); background:var(--bg);
+    color:var(--muted); font:inherit; font-size:13px; cursor:pointer; white-space:nowrap}
+  .ed-rchip.active{background:var(--active); border-color:var(--active); color:var(--on-active); font-weight:600}
+  .ed-titlebar{margin-bottom:12px}
+  .ed-titlebar label{display:block; font-size:11px; color:var(--muted); margin-bottom:4px}
+  .ed-userSel{width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text); border-radius:9px; padding:9px 10px; font:inherit; font-size:13px; box-sizing:border-box; margin-bottom:2px}
+  .ed-bar #ed-roomsel{flex:1 1 140px}
+  .ed-titlebar .ed-check{display:flex; align-items:center; gap:8px; margin:10px 0 0; font-size:13px; color:var(--text); cursor:pointer; user-select:none}
+  .ed-titlebar .ed-check input{width:17px; height:17px; margin:0; flex:none; accent-color:var(--active); cursor:pointer}
+  .ed-tokens{margin-top:16px; border-top:1px solid var(--border); padding-top:12px}
+  .ed-tk-h{font-size:13px; font-weight:600; color:var(--text); margin-bottom:8px}
+  .ed-tk-item{display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--border); flex-wrap:wrap}
+  .ed-tk-info{flex:1; min-width:0; display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+  .ed-tk-info b{font-size:13px}
+  .ed-tk-badge{font-size:10px; padding:2px 7px; border-radius:20px; font-weight:600}
+  .ed-tk-badge.ctrl{background:var(--active-soft); color:var(--active)}
+  .ed-tk-badge.view{background:var(--raised); color:var(--muted)}
+  .ed-tk-seen{font-size:11px; color:var(--faint)}
+  .ed-tk-act{display:flex; gap:6px; flex:none}
+  .ed-tk-empty{font-size:12px; color:var(--muted); padding:6px 0}
+  .ed-tk-new{display:flex; flex-direction:column; gap:8px; margin-top:12px}
+  .ed-tk-new input[type=text],.ed-tk-new #ed-tk-title{width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text); border-radius:9px; padding:9px 10px; font:inherit; font-size:13px; box-sizing:border-box}
+  .ed-tk-link{font-size:12px; color:var(--muted); background:var(--raised); border-radius:9px; padding:9px 10px}
+  .ed-tk-url{font-family:var(--mono); font-size:11px; color:var(--text); word-break:break-all}
+  .ed-move{margin-top:8px}
+  .ed-move .ed-moveto{width:100%; color:var(--muted)}
+  .ed-room-head{display:flex; align-items:center; gap:8px; margin-bottom:10px}
+  .ed-room-head input{flex:1}
+  .ed-mini{width:32px; height:32px; border-radius:8px; border:1px solid var(--border); background:var(--raised);
+    color:var(--text); cursor:pointer; font-size:14px; flex:none; line-height:1; display:grid; place-items:center}
+  .ed-mini:active{transform:scale(.92)}
+  .ed-mini.del{color:var(--bad)}
+  .ed-mini:disabled{opacity:.4; cursor:default; transform:none}
+  .ed-mini svg{width:15px; height:15px}
+
+  .ed-card{background:var(--bg); border:1px solid var(--border); border-radius:11px; padding:10px; margin-bottom:9px}
+  .ed-card-top{display:flex; gap:6px; align-items:center; margin-bottom:8px}
+  .ed-card-top .ed-obj{flex:1}
+  .ed-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:8px}
+  .ed-field label{display:block; font-size:11px; color:var(--muted); margin-bottom:3px}
+  .ed-seg{display:flex; gap:4px; flex-wrap:wrap}
+  .ed-multi{display:flex; gap:4px; flex-wrap:wrap}
+  .ed-multi .ed-segbtn{flex:0 0 auto; padding:7px 10px}
+  .ed-segbtn{flex:1; min-width:34px; padding:8px 4px; border-radius:8px; cursor:pointer;
+    border:1px solid var(--border); background:var(--bg); color:var(--muted); font:inherit; font-size:12px}
+  .ed-segbtn.active{background:var(--active); border-color:var(--active); color:var(--on-active); font-weight:600}
+  .ed-segbtn:active{transform:scale(.94)}
+  .editor input,.editor select{width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text);
+    border-radius:8px; padding:8px 9px; font:inherit; font-size:13px}
+  .ed-room > .ed-add{margin-top:4px}
+  .ed-add{width:100%; padding:9px; border-radius:10px; border:1px dashed var(--faint); background:transparent;
+    color:var(--link); font:inherit; font-size:13px; cursor:pointer}
+  .ed-add:hover{background:var(--raised)}
+  .ed-addroom{margin-top:6px}
+
+  /* ---- выбор цвета ---- */
+  .cpicker{position:fixed; inset:0; z-index:70; display:none; align-items:center; justify-content:center;
+    padding:16px; background:rgba(0,0,0,.62)}
+  .cpicker.show{display:flex}
+  .cp-box{background:var(--surface); border:1px solid var(--border); border-radius:var(--r);
+    width:100%; max-width:340px; padding:14px; display:flex; flex-direction:column; gap:12px}
+  .cp-head{display:flex; align-items:center}
+  .cp-title{flex:1; font-size:14px; font-weight:600}
+  .cp-wheel{position:relative; width:230px; max-width:72vw; aspect-ratio:1; margin:2px auto 0; border-radius:50%;
+    cursor:crosshair; touch-action:none; border:1px solid var(--border);
+    background:radial-gradient(circle at center,#fff 0%,rgba(255,255,255,0) 68%),
+      conic-gradient(#ff0000,#ffff00,#00ff00,#00ffff,#0000ff,#ff00ff,#ff0000)}
+  .cp-wheel-cur{position:absolute; width:20px; height:20px; border-radius:50%; border:3px solid #fff;
+    box-shadow:0 0 0 1px #0007,0 1px 5px #0008; transform:translate(-50%,-50%); pointer-events:none}
+  .cp-val{-webkit-appearance:none; appearance:none; width:100%; height:14px; border-radius:8px; outline:none;
+    cursor:pointer; touch-action:none; background:linear-gradient(to right,#000,#fff)}
+  .cp-val::-webkit-slider-thumb{-webkit-appearance:none; width:20px; height:20px; border-radius:50%;
+    background:#fff; border:2px solid #0005; cursor:pointer}
+  .cp-val::-moz-range-thumb{width:18px; height:18px; border-radius:50%; background:#fff; border:2px solid #0005}
+  .cp-row{display:flex; align-items:center; gap:10px}
+  .cp-preview{width:34px; height:34px; border-radius:9px; border:1px solid var(--border); flex:none}
+  .cp-hex{flex:1; font-family:var(--mono); text-transform:uppercase}
+  .cp-inputs{display:flex; flex-direction:column; gap:6px; margin-top:8px}
+  .cp-in-row{display:flex; align-items:center; gap:6px}
+  .cp-in-row span{width:34px; font-size:11px; color:var(--muted); flex:none}
+  .cp-in-row input{flex:1; min-width:0; font-family:var(--mono); font-size:13px; text-align:center; background:var(--surface); border:1px solid var(--border); color:var(--text); border-radius:8px; padding:7px 4px}
+  .cp-presets{display:grid; grid-template-columns:repeat(8,1fr); gap:6px}
+  .cp-tabs{display:flex; gap:6px; margin:2px 0 10px}
+  .cp-tab{flex:1; padding:8px; border-radius:9px; border:1px solid var(--border); background:var(--raised); color:var(--muted); font:inherit; font-size:13px; cursor:pointer}
+  .cp-tab.active{background:var(--active); border-color:var(--active); color:var(--on-active); font-weight:600}
+  .cp-wrow{display:flex; flex-direction:column; gap:5px; margin-bottom:14px}
+  .cp-wlab{font-size:12px; color:var(--muted)}
+  .cp-cct{background:linear-gradient(to right,#ff9838,#ffd9a8,#fff,#cfe0ff,#a9c6ff)}
+  .cp-cct::-webkit-slider-thumb{background:#fff; border:2px solid #888}
+  .cp-cct::-moz-range-thumb{background:#fff; border:2px solid #888}
+  .cp-foot{margin-top:6px}
+  .cp-foot .ed-btn{width:100%}
+  .cp-sw{width:100%; aspect-ratio:1; border-radius:7px; border:1px solid var(--border); cursor:pointer; padding:0}
+  .cp-sw:active{transform:scale(.9)}
+
+  /* состояния */
+  .empty,.loading{text-align:center; color:var(--muted); padding:60px 20px; font-size:14px}
+  .loading .dot{margin:0 auto 14px; width:12px; height:12px}
+  footer{text-align:center; color:var(--faint); font-size:11px; padding:22px 0 10px}
+  footer .mono{font-family:var(--mono)}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><b id="brand-title">Дом</b><span id="clock" class="mono"></span></div>
+  <div class="spacer"></div>
+  <div class="heart"><span id="hdot" class="dot"></span><span id="hstat">…</span></div>
+  <button id="bell" class="iconbtn" title="Сообщения" aria-label="Сообщения" style="position:relative">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+    <span id="bell-badge" class="bell-badge" style="display:none">0</span>
+  </button>
+  <button id="theme" class="iconbtn" title="Тема" aria-label="Тема">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="13.5" cy="6.5" r="1.5"/><circle cx="17.5" cy="10.5" r="1.5"/><circle cx="8.5" cy="7.5" r="1.5"/><circle cx="6.5" cy="12.5" r="1.5"/>
+      <path d="M12 2a10 10 0 1 0 0 20c1.1 0 2-.9 2-2 0-.5-.2-1-.5-1.3-.3-.4-.5-.8-.5-1.2 0-1 .9-1.5 2-1.5h1.5A4 4 0 0 0 22 10 10 10 0 0 0 12 2z"/></svg>
+  </button>
+  <button id="edit" class="iconbtn" title="Редактировать" aria-label="Редактировать">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+  </button>
+  <button id="settings" class="iconbtn" title="Настройки" aria-label="Настройки">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+  </button>
+  <button id="refresh" class="iconbtn" title="Обновить" aria-label="Обновить">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+  </button>
+</header>
+
+<div id="banner" class="banner"></div>
+<div id="toasts"></div>
+<div id="chatModal">
+  <div class="chat-box">
+    <div class="chat-head"><b>Сообщения</b><button class="chat-close" id="chat-close" aria-label="Закрыть">×</button></div>
+    <div class="chat-list" id="chat-list"></div>
+    <div class="chat-input" id="chat-input" style="display:none">
+      <input id="chat-text" type="text" placeholder="Сообщение или команда…" maxlength="500" autocomplete="off">
+      <button id="chat-send">→</button>
+    </div>
+  </div>
+</div>
+<div id="thememenu" class="thememenu"></div>
+<nav id="tabs" class="tabs"></nav>
+<main id="app">
+  <div class="loading"><div class="dot live"></div>Подключение к Majordomo…</div>
+</main>
+<footer>Majordomo · <span class="mono" id="foot">—</span></footer>
+
+<div id="cmodal" class="cmodal" role="dialog" aria-modal="true" aria-label="График">
+  <div class="cmodal-box">
+    <div class="cmodal-head">
+      <span class="cmodal-title" id="cmodal-title">График</span>
+      <div class="cmodal-ranges" id="cmodal-ranges">
+        <button class="crange active" data-range="24h">Сутки</button>
+        <button class="crange" data-range="7d">Неделя</button>
+        <button class="crange" data-range="31d">Месяц</button>
+      </div>
+      <button class="cmodal-close" id="cmodal-close" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="cmodal-body"><iframe id="cmodal-frame" title="История" src="about:blank" scrolling="no"></iframe></div>
+  </div>
+</div>
+
+<div id="cardinfo" class="cmodal">
+  <div class="cmodal-box ci-boxsize">
+    <div class="cmodal-head"><span class="cmodal-title" id="ci-title">Устройство</span>
+      <button id="ci-close" class="cmodal-close" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="ci-body" id="ci-body"></div>
+  </div>
+</div>
+
+<div id="webrtc" class="cmodal">
+  <div class="cmodal-box">
+    <div class="cmodal-head"><span class="cmodal-title" id="rtc-title">Камера</span>
+      <button id="rtc-close" class="cmodal-close" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="cmodal-body"><iframe id="rtc-frame" title="Камера" src="about:blank" allow="autoplay; fullscreen"></iframe></div>
+  </div>
+</div>
+
+<div id="editor" class="editor">
+  <div class="ed-head">
+    <b>Редактор панели</b>
+    <div class="ed-actions">
+      <button id="ed-save" class="ed-btn ed-primary">Сохранить</button>
+      <button id="ed-close" class="ed-btn">Закрыть</button>
+      <button id="ed-import" class="ed-btn" title="Загрузить раскладку из файла">Импорт</button>
+      <button id="ed-export" class="ed-btn" title="Скачать раскладку в файл">Экспорт</button>
+      <input id="ed-file" type="file" accept="application/json,.json" style="display:none">
+    </div>
+  </div>
+  <div id="ed-body" class="ed-body"></div>
+</div>
+
+<div id="settingsPanel" class="editor">
+  <div class="ed-head">
+    <b>Настройки</b>
+    <div class="ed-actions">
+      <button id="set-save" class="ed-btn ed-primary">Сохранить</button>
+      <button id="set-close" class="ed-btn">Закрыть</button>
+    </div>
+  </div>
+  <div id="set-body" class="ed-body"></div>
+</div>
+
+<div id="cpicker" class="cpicker">
+  <div class="cp-box">
+    <div class="cp-head"><span class="cp-title">Цвет</span>
+      <button id="cp-close" class="cmodal-close" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="cp-tabs" id="cp-tabs" style="display:none">
+      <button type="button" class="cp-tab active" data-cptab="colour">Цвет</button>
+      <button type="button" class="cp-tab" data-cptab="white">Белый</button>
+    </div>
+    <div class="cp-pane" id="cp-pane-colour">
+      <div class="cp-wheel" id="cp-wheel"><div class="cp-wheel-cur" id="cp-wheel-cur"></div></div>
+      <input type="range" id="cp-val" class="cp-val" min="0" max="100" value="100" aria-label="Яркость">
+      <div class="cp-row">
+        <span class="cp-preview" id="cp-preview"></span>
+        <input type="text" id="cp-hex" class="cp-hex" maxlength="7" spellcheck="false">
+      </div>
+      <div class="cp-inputs">
+        <div class="cp-in-row"><span>RGB</span><input id="cp-r" type="number" min="0" max="255" inputmode="numeric"><input id="cp-g" type="number" min="0" max="255" inputmode="numeric"><input id="cp-b" type="number" min="0" max="255" inputmode="numeric"></div>
+        <div class="cp-in-row"><span>HSV</span><input id="cp-h" type="number" min="0" max="360" inputmode="numeric"><input id="cp-s" type="number" min="0" max="100" inputmode="numeric"><input id="cp-vv" type="number" min="0" max="100" inputmode="numeric"></div>
+      </div>
+      <div class="cp-presets" id="cp-presets"></div>
+    </div>
+    <div class="cp-pane" id="cp-pane-white" style="display:none">
+      <div class="cp-wrow"><span class="cp-wlab">Яркость</span><input type="range" id="cp-wbright" class="cp-val" min="0" max="100"></div>
+      <div class="cp-wrow"><span class="cp-wlab">Температура</span><input type="range" id="cp-wtemp" class="cp-val cp-cct" min="0" max="1000"></div>
+    </div>
+    <div class="cp-foot"><button id="cp-apply" class="ed-btn ed-primary">Готово</button></div>
+  </div>
+</div>
+
+<script>
+  /* Реестр плагинов-карточек. Определяется ДО движка и до файлов карточек. */
+  window.Lovelace = { cards:{}, _rerender:null,
+    register:function(t,s){ this.cards[t]=s; if(this._rerender) this._rerender(); },
+    util:{
+      tru:function(v){ return v==1||v==="1"||v===true||v==="on"||v==="true"; },
+      // значение свойства: сперва values[prop] (reads), затем легаси-поле
+      V:function(c, prop, legacy){
+        if (c.values && prop!=null && Object.prototype.hasOwnProperty.call(c.values, prop)) return c.values[prop];
+        return legacy!==undefined ? legacy : c.value;
+      },
+      // инъекция CSS карточки (стили лежат в файле самой карточки)
+      css:function(text){ var s=document.createElement("style"); s.textContent=text; document.head.appendChild(s); }
+    } };
+</script>
+<!-- Карточки не подключаются здесь: все внешние, грузятся из tools/cards/index.json -->
+
+
+<script>
+"use strict";
+(function(){
+  // ---- настройки -------------------------------------------------------
+  var API = new URL("../../api.php/module/lovelace/", location.href).href;   // index.html лежит в templates/lovelace/ -> ../../ = корень сайта
+  var POLL_MS = 5000;              // интервал опроса (страховка); при живом WS — реже
+  var STALE_MS = 15000;           // нет ответа дольше -> «оффлайн»
+  var WS_ENABLE = true;           // живые обновления через WebSocket Majordomo
+  var _q = new URLSearchParams(location.search);
+  var WS_PORT = _q.get("ws_port") || "8001";           // порт WS из настроек Majordomo (WEBSOCKETS_PORT)
+  var WS_PATH = _q.get("ws_path") || "/majordomo";     // путь WS
+  var WS_URL = "";                                      // полный адрес (переопределяет всё). Пусто = ws://<хост страницы>:WS_PORT+WS_PATH
+  var WS_OFF = _q.get("ws_off") === "1";               // WS отключён в Majordomo
+  var IS_ADMIN = _q.get("admin") === "1";              // первичное значение из query; уточняется по API (/settings)
+  var MY_UID = _q.get("uid") || "0";
+  var TOKEN = _q.get("token") || "";        // токен настенного устройства (киоск-режим)
+  var DEV = "";
+  try{ DEV = localStorage.getItem("lvl_dev") || ""; }catch(e){}
+  function A(p){
+    var extra=[];
+    if(TOKEN) extra.push("token="+encodeURIComponent(TOKEN));
+    else if(DEV) extra.push("dev="+encodeURIComponent(DEV));
+    return API + p + (extra.length ? ((p.indexOf("?")<0?"?":"&")+extra.join("&")) : "");
+  }
+  var WS_DEBUG = false;           // true = логировать входящие WS-сообщения в консоль (для диагностики формата)
+  var WS_SUBSCRIBE = '{"action":"Subscribe","data":{"TYPE":"devices","DEVICE_ID":"0"}}';  // подписка на все устройства (протокол Majordomo)
+
+  // ---- состояние -------------------------------------------------------
+  var app = document.getElementById("app");
+  var banner = document.getElementById("banner");
+  var tabsEl = document.getElementById("tabs");
+  var hdot = document.getElementById("hdot"), hstat = document.getElementById("hstat");
+  var lastOk = 0, usingMock = false, pollTimer = null, inflight = false;
+  var wsSock = null, wsConnected = false, wsTimer = null, wsRefreshT = null;
+  var wsFails = 0, wsEverConnected = false;
+
+  // ---- темы -------------------------------------------------------------
+  var THEMES=[
+    {id:"dark",name:"Тёмная",bg:"#10131a",ac:"#ffb454"},
+    {id:"light",name:"Светлая",bg:"#f4f6f9",ac:"#e8961f"},
+    {id:"midnight",name:"Полночь",bg:"#0d1120",ac:"#8b7cff"},
+    {id:"ocean",name:"Океан",bg:"#0a1719",ac:"#2fd8c3"},
+    {id:"forest",name:"Лес",bg:"#0c1410",ac:"#4fd18a"},
+    {id:"sunset",name:"Закат",bg:"#160f0f",ac:"#ff7a45"},
+    {id:"grape",name:"Виноград",bg:"#120e1c",ac:"#c07cff"},
+    {id:"paper",name:"Бумага",bg:"#f3efe6",ac:"#c8791e"}
+  ];
+  var themeBtn=document.getElementById("theme");
+  var themeMenu=document.getElementById("thememenu");
+  function themeGet(){ try{return localStorage.getItem("lvl_theme")||"dark";}catch(e){return "dark";} }
+  var themeSync=false;   // синхронизировать тему через БД (на пользователя)
+  function curTheme(){ return document.documentElement.getAttribute("data-theme")||"dark"; }
+  function pushPrefs(){ if(typeof edPost==="function") edPost("saveprefs",{prefs:{theme:curTheme(),themeSync:themeSync}}).catch(function(){}); }
+  function savePrefs(obj){
+    try{ if(obj.theme)localStorage.setItem("lvl_theme",obj.theme); if(obj.lastRoom)localStorage.setItem("lvl_lastroom",obj.lastRoom); }catch(e){}
+  }
+  function applyTheme(id,persist){
+    document.documentElement.setAttribute("data-theme",id);
+    var t=THEMES.filter(function(x){return x.id===id;})[0];
+    var meta=document.querySelector('meta[name="theme-color"]'); if(meta&&t)meta.setAttribute("content",t.bg);
+    if(persist!==false){ savePrefs({theme:id}); if(themeSync) pushPrefs(); }   // включена синхронизация -> в БД
+  }
+  function buildThemeMenu(){
+    var cur=document.documentElement.getAttribute("data-theme")||"dark";
+    themeMenu.innerHTML=THEMES.map(function(t){
+      return '<button class="tm-item'+(t.id===cur?" active":"")+'" data-theme="'+t.id+'">'
+        +'<span class="tm-sw" style="background:'+t.bg+'"><i style="background:'+t.ac+'"></i></span>'+esc(t.name)+'</button>';
+    }).join("");
+  }
+  applyTheme(themeGet(), false);   // мгновенно из кэша, без пересохранения
+  themeBtn.addEventListener("click",function(e){
+    e.stopPropagation();
+    if(themeMenu.classList.contains("show")){themeMenu.classList.remove("show");return;}
+    buildThemeMenu(); themeMenu.classList.add("show");
+  });
+  themeMenu.addEventListener("click",function(e){
+    var b=e.target.closest(".tm-item"); if(!b)return;
+    applyTheme(b.dataset.theme,true); buildThemeMenu(); themeMenu.classList.remove("show");
+  });
+  document.addEventListener("click",function(){themeMenu.classList.remove("show");});
+  var lastRooms = [], activeRoom = "__all__";   // выбранная комната; __all__ = все
+  var hideAllTab = false;                       // скрывать вкладку «Все»
+  try{ activeRoom = localStorage.getItem("lvl_lastroom") || "__all__"; }catch(e){}
+
+  // ---- реестр плагинов-карточек (определён в отдельном блоке до движка) --
+  var Lovelace = window.Lovelace;
+  Lovelace._rerender = function(){ if(lastRooms.length) paint(); };
+  var _pluginBinds = {}, _pluginSeq = 0;
+
+  // ---- иконки (инлайн SVG, без внешних библиотек) ----------------------
+  var ICONS = {
+    bulb:'<path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.5.5 1 1.5 1 2.5h6c0-1 .5-2 1-2.5A6 6 0 0 0 12 3z"/>',
+    power:'<path d="M12 3v9M6.6 6.6a8 8 0 1 0 10.8 0"/>',
+    thermo:'<path d="M14 14.76V5a2 2 0 0 0-4 0v9.76a4 4 0 1 0 4 0z"/>',
+    droplet:'<path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z"/>',
+    motion:'<circle cx="13" cy="4" r="2"/><path d="M10 21l2-6-2.5-2 1-4.5L14 11h3M9.5 9L6 10"/>',
+    camera:'<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3l2-3h8l2 3h3a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>',
+    cloud:'<path d="M7 18a4.5 4.5 0 1 1 .9-8.9A5.5 5.5 0 0 1 18 11a3.5 3.5 0 0 1-.5 7H7z"/>',
+    blinds:'<path d="M3 4h18M4 4v16M20 4v16M4 8h16M4 12h16M4 16h16"/>',
+    fan:'<circle cx="12" cy="12" r="2"/><path d="M12 10c-.7-2.5.3-6-2-6s-2.3 3.5-.3 5.5M14 12c2.5-.7 6 .3 6-2s-3.5-2.3-5.5-.3M12 14c.7 2.5-.3 6 2 6s2.3-3.5.3-5.5M10 12c-2.5.7-6-.3-6 2s3.5 2.3 5.5.3"/>',
+    plug:'<path d="M9 2v6M15 2v6M7 8h10v2a5 5 0 0 1-10 0zM12 15v5"/>',
+    door:'<path d="M5 21V4a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v17M4 21h14M13 12h.6"/>',
+    window:'<rect x="4" y="4" width="16" height="16" rx="1"/><path d="M12 4v16M4 12h16"/>',
+    lock:'<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+    fire:'<path d="M12 3c1.5 3 4.5 4.5 4.5 8.5a4.5 4.5 0 0 1-9 0c0-1.3.5-2.3 1.3-3.3.4 2.2 2.2 2.2 2.2 0 0-2-1.5-3.2 1-5.2z"/>',
+    bell:'<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/>',
+    tv:'<rect x="2" y="7" width="20" height="13" rx="2"/><path d="M8 3l4 4 4-4"/>',
+    music:'<path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/>',
+    battery:'<rect x="2" y="8" width="16" height="8" rx="1"/><path d="M20 11v2M5 11v2"/>',
+    wifi:'<path d="M5 9a11 11 0 0 1 14 0M8 12a7 7 0 0 1 8 0M11 15a3 3 0 0 1 2 0"/><circle cx="12" cy="18.5" r=".6"/>',
+    sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/>',
+    moon:'<path d="M21 12.8A8 8 0 1 1 11.2 3a6 6 0 0 0 9.8 9.8z"/>',
+    bolt:'<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',
+    clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    shield:'<path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6z"/>',
+    leaf:'<path d="M11 20A7 7 0 0 1 4 13C4 7 9 4 20 4c0 8-4 12-9 12M4 20c1-4 4-7 8-8"/>',
+    heart:'<path d="M12 21C5 15 3 11 3 8a4 4 0 0 1 8-.5A4 4 0 0 1 19 8c0 3-2 7-7 13z"/>',
+    gauge:'<path d="M12 13l4-3M3.5 13a8.5 8.5 0 0 1 17 0"/><circle cx="12" cy="13" r="1.3"/>',
+    coffee:'<path d="M4 8h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5zM17 9h2a2 2 0 0 1 0 4h-2M7 3v2M11 3v2M15 3v2"/>',
+    garage:'<path d="M3 21V9l9-5 9 5v12M6 21v-7h12v7M6 17h12"/>',
+    dot:'<circle cx="12" cy="12" r="4"/>'
+  };
+  function svg(name){
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+      +'stroke-linecap="round" stroke-linejoin="round">'+(ICONS[name]||ICONS.dot)+'</svg>';
+  }
+
+  // ---- утилиты ---------------------------------------------------------
+  function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];});}
+  function truthy(v){return v==1||v==="1"||v===true||v==="on"||v==="true";}
+  function pad(n){return n<10?"0"+n:""+n;}
+  function tick(){var d=new Date();document.getElementById("clock").textContent=
+    pad(d.getHours())+":"+pad(d.getMinutes());}
+  setInterval(tick,10000); tick();
+
+  // ядро api.php оборачивает ответ: {request,apiHandleResult,...}. Разворачиваем.
+  function apiJson(r){ return r.json().then(function(j){ return (j && j.apiHandleResult!==undefined) ? j.apiHandleResult : j; }); }
+  // ---- сеть ------------------------------------------------------------
+  function getState(){
+    return fetch(A("state"),{headers:{"Accept":"application/json"},cache:"no-store",credentials:"same-origin"})
+      .then(function(r){if(!r.ok)throw 0;return apiJson(r);})
+      .then(function(j){if(!j||!j.ok)throw 0;return j;});
+  }
+  var writesInflight=0;
+  function trackWrite(p){ writesInflight++; p.then(function(){writesInflight--;},function(){writesInflight--;}); return p; }
+  // При живом WS истинное состояние всё равно придёт пушем и op=state его подтвердит,
+  // поэтому неудачный ответ не считаем фатальным — не мигаем ложным «не удалось».
+  function softenIfWS(p){ return p.catch(function(err){ if(wsConnected) return {ok:true,soft:true}; throw err; }); }
+  function postSet(object,property,value){
+    function attempt(){
+      return fetch(A("set"),{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({object:object,property:property,value:value})})
+        .then(function(r){if(!r.ok)throw 0;return apiJson(r);})
+        .then(function(j){if(!j||!j.ok)throw 0;return j;});
+    }
+    // одна запись = один запрос (без повтора: повтор удваивал висящие connect'ы к недоступному устройству)
+    return softenIfWS(trackWrite(attempt()));
+  }
+  function postMethod(object,method){
+    return softenIfWS(trackWrite(fetch(A("method"),{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({object:object,method:method,params:{}})})
+      .then(function(r){if(!r.ok)throw 0;return apiJson(r);})
+      .then(function(j){if(!j||!j.ok)throw 0;return j;})));
+  }
+
+  // ---- рендер ----------------------------------------------------------
+  function deviceIsOn(dev){
+    return (dev.controls||[]).some(function(c){var p=Lovelace.cards[c.type]; return p&&p.isOn&&p.isOn(c);});
+  }
+
+  function render(data){
+    lastRooms = data.rooms || [];
+    hideAllTab = !!data.hideAllTab;
+    var bt=document.getElementById("brand-title");
+    if(bt) bt.textContent=(data.title&&String(data.title).trim())?data.title:"Дом";
+    buildTabs();
+    paint();
+  }
+
+  // строим вкладки только когда набор комнат изменился (не сбивая скролл при опросе)
+  function buildTabs(){
+    if(lastRooms.length<=1){tabsEl.innerHTML=""; tabsEl.dataset.sig=""; return;}
+    var first=lastRooms[0].id||lastRooms[0].title;
+    if(activeRoom!=="__all__" && !lastRooms.some(function(r){return (r.id||r.title)===activeRoom;})) activeRoom = hideAllTab ? first : "__all__";
+    if(hideAllTab && activeRoom==="__all__") activeRoom = first;   // «Все» скрыта — встаём на первую
+    var keys=(hideAllTab?"H|":"")+lastRooms.map(function(r){return r.id||r.title;}).join("|");
+    if(tabsEl.dataset.sig!==keys){
+      var h=hideAllTab?"":('<button class="tab'+(activeRoom==="__all__"?" active":"")+'" data-room="__all__">Все</button>');
+      lastRooms.forEach(function(r){
+        var key=r.id||r.title;
+        h+='<button class="tab'+(activeRoom===key?" active":"")+'" data-room="'+esc(key)+'">'+esc(r.title||r.id)+'</button>';
+      });
+      tabsEl.innerHTML=h; tabsEl.dataset.sig=keys;
+      tabsEl.querySelectorAll(".tab").forEach(function(b){
+        b.addEventListener("click",function(){activeRoom=b.dataset.room; savePrefs({lastRoom:activeRoom}); buildTabs(); paint();});
+      });
+    } else {
+      tabsEl.querySelectorAll(".tab").forEach(function(b){b.classList.toggle("active", b.dataset.room===activeRoom);});
+    }
+    scrollActiveTabIntoView();
+  }
+  function scrollActiveTabIntoView(){
+    var a=tabsEl.querySelector(".tab.active"); if(!a) return;
+    var l=a.offsetLeft, r=l+a.offsetWidth;
+    if(l < tabsEl.scrollLeft) tabsEl.scrollLeft=l-12;
+    else if(r > tabsEl.scrollLeft+tabsEl.clientWidth) tabsEl.scrollLeft=r-tabsEl.clientWidth+12;
+  }
+
+  function paint(){
+    _pluginBinds={}; _pluginSeq=0;
+    if(!lastRooms.length){app.innerHTML='<div class="empty">Нет объектов для отображения.</div>';return;}
+    var shown=(activeRoom==="__all__")?lastRooms:lastRooms.filter(function(r){return (r.id||r.title)===activeRoom;});
+    var showTitles=(activeRoom==="__all__");   // внутри одной комнаты заголовок дублирует вкладку
+    var html="";
+    shown.forEach(function(room){
+      html+='<section class="room">'+(showTitles?('<h2>'+esc(room.title||room.id)+'</h2>'):'')+'<div class="grid">';
+      (room.devices||[]).forEach(function(dev){html+=card(dev);});
+      html+='</div></section>';
+    });
+    app.innerHTML=html;
+    app.querySelectorAll(".card-top[data-info]").forEach(function(el){
+      el.addEventListener("click",function(){ openCardInfo(el.dataset.info, el.dataset.infoTitle); });
+    });
+    app.querySelectorAll("[data-lvl-bind]").forEach(function(el){
+      var b=_pluginBinds[el.getAttribute("data-lvl-bind")];
+      if(b && typeof b.p.bind==="function")
+        b.p.bind(el, b.dev, b.c, {postSet:postSet, postMethod:postMethod, flash:flash, refresh:refresh,
+          openChart:openChart, openColor:openColor, openWebrtc:openWebrtc, truthy:truthy, normHex:normHex});
+    });
+    collapseSpacers();
+  }
+
+  // распорка нужна только чтобы «добить» остаток строки; если она оказалась
+  // в начале строки (мало колонок — перенос уже произошёл), она лишняя — прячем
+  function collapseSpacers(){
+    app.querySelectorAll(".grid").forEach(function(grid){
+      var sps=grid.querySelectorAll(".card.spacer");
+      if(!sps.length) return;
+      sps.forEach(function(s){ s.style.display=""; });
+      var hide=[];
+      sps.forEach(function(s){
+        var prev=s.previousElementSibling;
+        if(!prev || s.offsetTop!==prev.offsetTop) hide.push(s);   // начало строки => лишняя
+      });
+      hide.forEach(function(s){ s.style.display="none"; });
+    });
+  }
+  var _spTimer;
+  window.addEventListener("resize",function(){ clearTimeout(_spTimer); _spTimer=setTimeout(collapseSpacers,150); });
+
+  function card(dev){
+    var on=deviceIsOn(dev);
+    var wcls={"2":"w2","3":"w3","4":"w4","full":"wfull"}[String(dev.w)]||"";
+    var hcls=(dev.h==="2"||dev.h==="tall")?"tall":((dev.h==="3"||dev.h==="xtall")?"xtall":"");
+    var sz=(wcls?(" "+wcls):"")+(hcls?(" "+hcls):"");
+    if((dev.controls||[]).length && dev.controls[0].type==="spacer")
+      return '<div class="card spacer"></div>';   // перенос: заполняет остаток строки (CSS), высота 0
+    // карточки без шапки (напр. часы): рендерим только содержимое
+    var _ft=(dev.controls&&dev.controls[0])?dev.controls[0].type:"";
+    var _p0=Lovelace.cards[_ft];
+    if(_p0 && _p0.noHeader){
+      var hh='<div class="card'+sz+'"><div class="ctrls">';
+      (dev.controls||[]).forEach(function(c){hh+=control(dev,c);});
+      return hh+'</div></div>';
+    }
+    var hasObj=!!dev.id;   // карточки без объекта (напр. webrtc) — без инфо-окна
+    var info=hasObj?(' data-info="'+esc(dev.id)+'" data-info-title="'+esc(dev.title||dev.id)+'"'):'';
+    var h='<div class="card'+(on?" on":"")+sz+'"><div class="card-top'+(hasObj?"":" no-obj")+'"'+info+'>'
+      +'<div class="ico">'+svg(dev.icon)+'</div>'
+      +'<div class="titles"><div class="t">'+esc(dev.title||dev.id||"—")+'</div>'
+      +(dev.id?'<div class="s">'+esc(dev.id)+'</div>':'')+'</div>'
+      +(dev.alive!=null
+          ? '<span class="card-alive '+(dev.alive?"on":"off")+'" title="'+(dev.alive?"На связи":"Не в сети")+'"></span>'
+          : (hasObj?'<span class="card-i" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg></span>':''))
+      +'</div><div class="ctrls">';
+    (dev.controls||[]).forEach(function(c){h+=control(dev,c);});
+    return h+'</div></div>';
+  }
+
+  function control(dev,c){
+    var lbl=c.label?'<div class="ctrl-label">'+esc(c.label)+'</div>':"";
+    var plug=Lovelace.cards[c.type];
+    if(plug && typeof plug.render==="function"){
+      var cid="lc"+(_pluginSeq++);
+      _pluginBinds[cid]={p:plug,dev:dev,c:c};
+      var ctx={esc:esc,svg:svg,truthy:truthy,normHex:normHex};
+      return lbl+'<div class="ctrl-plugin" data-lvl-bind="'+cid+'">'+plug.render(dev,c,ctx)+'</div>';
+    }
+    // тип без плагина — простое значение (карточка не «падает»)
+    var v=(c.values&&c.prop&&c.values[c.prop]!=null)?c.values[c.prop]:c.value;
+    return lbl+'<div class="textv">'+esc(v==null?"":v)+esc(c.unit?" "+c.unit:"")+'</div>';
+  }
+
+  // ---- вспомогательное ------------------------------------------------
+  function normHex(v){
+    if(v==null) return "";
+    v=String(v).trim();
+    if(/^#?[0-9a-fA-F]{6}$/.test(v)) return v.charAt(0)==="#"?v:"#"+v;
+    var m=v.match(/(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+    if(m){var h=function(n){n=Math.max(0,Math.min(255,parseInt(n,10)));return ("0"+n.toString(16)).slice(-2);};
+      return "#"+h(m[1])+h(m[2])+h(m[3]);}
+    return "";
+  }
+
+  function flash(msg){banner.textContent=msg;banner.classList.add("show");
+    clearTimeout(flash._t);flash._t=setTimeout(function(){if(!usingMock)banner.classList.remove("show");},3500);}
+
+  // ---- УВЕДОМЛЕНИЯ из shoutbox (только в отдельном окне, чтобы не дублировать родную страницу) ----
+  var toastsEl=document.getElementById("toasts");
+  function showToast(who, text, tm){
+    if(!toastsEl) return;
+    var el=document.createElement("div"); el.className="toast";
+    el.innerHTML='<div class="t-head"><span class="t-who">'+esc(who||"")+'</span><span class="t-time">'+esc(tm||"")+'</span></div><div class="t-text">'+esc(text||"")+'</div>';
+    toastsEl.appendChild(el);
+    requestAnimationFrame(function(){ el.classList.add("show"); });
+    setTimeout(function(){ el.classList.remove("show"); setTimeout(function(){ if(el.parentNode) el.parentNode.removeChild(el); }, 250); }, 6500);
+    while(toastsEl.children.length>4) toastsEl.removeChild(toastsEl.firstChild);
+  }
+  var noteStandalone = (window.self===window.top);   // отдельное окно (не iframe родной страницы)
+  var noteSeen = null;                               // ключ верхней (свежей) записи прошлого опроса
+  var noteInit = false;                              // первый опрос — запоминаем молча
+  function parseShout(html){
+    // <span>ВРЕМЯ <b>АВТОР</b>: ТЕКСТ</span> — вернуть массив свежие->старые
+    var out=[], re=/<span>\s*([0-9:]+)\s*<b>(.*?)<\/b>\s*:\s*([\s\S]*?)<\/span>/g, m;
+    while((m=re.exec(html))){
+      var text=m[3].replace(/<[^>]+>/g,"").replace(/&lt;#[^>]*#&gt;/g,"").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&amp;/g,"&").trim();
+      out.push({tm:m[1], who:m[2].replace(/<[^>]+>/g,"").trim(), text:text, key:m[1]+"|"+text});
+    }
+    return out;
+  }
+  function pollShout(){
+    if(!noteStandalone || TOKEN) return;                 // в iframe/kiosk — не показываем
+    if(document.visibilityState==="hidden") return;
+    fetch("/popup/shoutbox.html?&limit=10&getdata=1&reverse=1",{cache:"no-store",credentials:"same-origin"})
+      .then(function(r){return r.text();}).then(function(html){
+        var list=parseShout(html); if(!list.length) return;
+        if(!noteInit){ noteInit=true; noteSeen=list[0].key; return; }   // первый опрос — молча
+        // показываем всё новее прошлой верхушки (list идёт свежие->старые)
+        var fresh=[];
+        for(var i=0;i<list.length;i++){ if(list[i].key===noteSeen) break; fresh.push(list[i]); }
+        noteSeen=list[0].key;
+        if(chatOpen) return;   // окно чата открыто — сообщения видны в ленте, тосты не нужны
+        fresh.reverse().forEach(function(n){ showToast(n.who, n.text, n.tm); });
+        chatUnread += fresh.length; updateBell();   // бейдж непрочитанных
+      }).catch(function(){});
+  }
+  // ---- ЧАТ/СООБЩЕНИЯ (колокольчик): история shoutbox + отправка (msg=) ----
+  var chatEl=document.getElementById("chatModal");
+  var chatListEl=document.getElementById("chat-list");
+  var chatOpen=false, chatUnread=0, chatPoll=null;
+  function updateBell(){
+    var b=document.getElementById("bell-badge"); if(!b) return;
+    if(chatUnread>0){ b.textContent=chatUnread>99?"99+":String(chatUnread); b.style.display=""; }
+    else b.style.display="none";
+  }
+  function renderChat(list, forceScroll){
+    if(!chatListEl) return;
+    if(!list.length){ chatListEl.innerHTML='<div class="chat-empty">Нет сообщений</div>'; return; }
+    // держались ли внизу до перерисовки (порог 40px)
+    var atBottom = (chatListEl.scrollHeight - chatListEl.scrollTop - chatListEl.clientHeight) < 40;
+    var html=list.slice().reverse().map(function(n){
+      return '<div class="chat-msg"><div class="cm-head"><span class="cm-who">'+esc(n.who)+'</span> · '+esc(n.tm)+'</div><div class="cm-text">'+esc(n.text)+'</div></div>';
+    }).join("");
+    chatListEl.innerHTML=html;
+    if(forceScroll || atBottom) chatListEl.scrollTop=chatListEl.scrollHeight;   // скроллим только если были внизу/принудительно
+  }
+  function loadChat(forceScroll){
+    fetch("/popup/shoutbox.html?&limit=30&getdata=1&reverse=1",{cache:"no-store",credentials:"same-origin"})
+      .then(function(r){return r.text();}).then(function(html){
+        var list=parseShout(html);
+        renderChat(list, forceScroll);
+        if(list.length){ noteSeen=list[0].key; noteInit=true; }   // синхронизируем с тостами
+      }).catch(function(){ if(chatListEl) chatListEl.innerHTML='<div class="chat-empty">Не удалось загрузить</div>'; });
+  }
+  function openChatBox(){
+    if(!chatEl) return;
+    chatOpen=true; chatUnread=0; updateBell();
+    // поле ввода — только при сессии (не kiosk)
+    var inp=document.getElementById("chat-input");
+    if(inp) inp.style.display = TOKEN ? "none" : "flex";
+    chatEl.classList.add("show"); updateScrollLock();
+    loadChat(true);                          // при открытии — вниз
+    chatPoll=setInterval(function(){ loadChat(false); }, 5000);   // фон — без прыжка вниз
+  }
+  function closeChatBox(){
+    chatOpen=false;
+    if(chatEl) chatEl.classList.remove("show");
+    if(chatPoll){ clearInterval(chatPoll); chatPoll=null; }
+    updateScrollLock();
+  }
+  function sendChat(){
+    var t=document.getElementById("chat-text"); if(!t) return;
+    var msg=t.value.trim(); if(!msg) return;
+    t.value="";
+    fetch("/popup/shoutbox.html?msg="+encodeURIComponent(msg)+"&getdata=1&reverse=1&limit=30",{cache:"no-store",credentials:"same-origin"})
+      .then(function(r){return r.text();}).then(function(html){
+        var list=parseShout(html);
+        renderChat(list, true);
+        if(list.length){ noteSeen=list[0].key; noteInit=true; }   // не всплывать тостом на своё же сообщение
+      }).catch(function(){});
+  }
+
+  // ---- график по тапу на сенсор (штатный pChart Majordomo) -------------
+  var chartTarget=null, chartRange="24h";
+  var INFO_POLL_MS=5000;
+  var cmodal=document.getElementById("cmodal");
+  var cframe=document.getElementById("cmodal-frame");
+  var ctitle=document.getElementById("cmodal-title");
+  function chartUrl(p,range){return "/pChart/?p="+encodeURIComponent(p)+"&op=log&subop="+range+"&minimal=1";}
+  function openChart(p,title){
+    chartTarget=p; ctitle.textContent=title||p;
+    cframe.src=chartUrl(p,chartRange);
+    cmodal.classList.add("show"); updateScrollLock();
+  }
+  function closeChart(){
+    cmodal.classList.remove("show"); cframe.src="about:blank"; chartTarget=null; updateScrollLock();
+  }
+  document.getElementById("cmodal-ranges").addEventListener("click",function(e){
+    var b=e.target.closest(".crange"); if(!b)return;
+    chartRange=b.dataset.range;
+    this.querySelectorAll(".crange").forEach(function(x){x.classList.toggle("active",x===b);});
+    if(chartTarget) cframe.src=chartUrl(chartTarget,chartRange);
+  });
+  document.getElementById("cmodal-close").addEventListener("click",closeChart);
+  cmodal.addEventListener("click",function(e){if(e.target===cmodal) closeChart();});
+  document.addEventListener("keydown",function(e){if(e.key==="Escape"&&cmodal.classList.contains("show")) closeChart();});
+
+  // ---- выбор цвета: цветовой круг + яркость (pointer-события) -----------
+  var cpicker=document.getElementById("cpicker");
+  var cpWheel=document.getElementById("cp-wheel"), cpWCur=document.getElementById("cp-wheel-cur");
+  var cpVal=document.getElementById("cp-val"), cpHex=document.getElementById("cp-hex");
+  var cpPrev=document.getElementById("cp-preview"), cpPresets=document.getElementById("cp-presets");
+  var cpR=document.getElementById("cp-r"), cpG=document.getElementById("cp-g"), cpB=document.getElementById("cp-b");
+  var cpHh=document.getElementById("cp-h"), cpSs=document.getElementById("cp-s"), cpVv=document.getElementById("cp-vv");
+  var cpTabs=document.getElementById("cp-tabs"), cpPaneColour=document.getElementById("cp-pane-colour"), cpPaneWhite=document.getElementById("cp-pane-white");
+  var cpWBright=document.getElementById("cp-wbright"), cpWTemp=document.getElementById("cp-wtemp");
+  var cpOpts=null, cpWDeb=null;
+  function cpSetTab(tab){
+    var white=(tab==="white");
+    cpPaneColour.style.display=white?"none":"";
+    cpPaneWhite.style.display=white?"":"none";
+    cpTabs.querySelectorAll(".cp-tab").forEach(function(b){ b.classList.toggle("active", b.dataset.cptab===tab); });
+    if(cpOpts && cpOpts.onTab) cpOpts.onTab(tab);
+  }
+  function cpClamp(v,a,b){v=parseFloat(v);if(isNaN(v))v=a;return Math.max(a,Math.min(b,v));}
+  function cpSetIf(el,v){ if(el && el!==document.activeElement) el.value=v; }
+  var cpH=0,cpS=1,cpV=1,cpCb=null,cpDeb=null;
+  var CP_PRESETS=["#ff5555","#ffb454","#ffe066","#5fd08a","#5ec8d8","#6ea8ff","#8b7cff","#ff7ac0",
+                  "#ffffff","#c0c0c0","#ff0000","#00c853","#2962ff","#aa00ff","#00bcd4","#000000"];
+  function hexToRgb(h){h=String(h||"").replace("#","");if(h.length===3)h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+    var n=parseInt(h,16); if(isNaN(n))n=0xffaa33; return {r:(n>>16)&255,g:(n>>8)&255,b:n&255};}
+  function rgbToHex(r,g,b){function x(v){v=Math.max(0,Math.min(255,Math.round(v)));return ("0"+v.toString(16)).slice(-2);}return "#"+x(r)+x(g)+x(b);}
+  function rgbToHsv(r,g,b){r/=255;g/=255;b/=255;var mx=Math.max(r,g,b),mn=Math.min(r,g,b),d=mx-mn,h=0;
+    if(d){if(mx===r)h=((g-b)/d)%6;else if(mx===g)h=(b-r)/d+2;else h=(r-g)/d+4;h*=60;if(h<0)h+=360;}
+    return {h:h,s:mx?d/mx:0,v:mx};}
+  function hsvToRgb(h,s,v){var c=v*s,x=c*(1-Math.abs((h/60)%2-1)),m=v-c,r=0,g=0,b=0;
+    if(h<60){r=c;g=x;}else if(h<120){r=x;g=c;}else if(h<180){g=c;b=x;}else if(h<240){g=x;b=c;}else if(h<300){r=x;b=c;}else{r=c;b=x;}
+    return {r:(r+m)*255,g:(g+m)*255,b:(b+m)*255};}
+  function cpHexNow(){var rgb=hsvToRgb(cpH,cpS,cpV);return rgbToHex(rgb.r,rgb.g,rgb.b);}
+  function cpUpdate(live){
+    var hex=cpHexNow();
+    // ручка на круге: угол = оттенок (0° сверху, по часовой), радиус = насыщенность
+    var a=cpH*Math.PI/180;
+    cpWCur.style.left=(50+Math.sin(a)*cpS*50)+"%";
+    cpWCur.style.top=(50-Math.cos(a)*cpS*50)+"%";
+    // ползунок яркости показывает шкалу текущего оттенка
+    cpVal.style.background="linear-gradient(to right,#000,hsl("+cpH+","+Math.round(cpS*100)+"%,50%))";
+    cpPrev.style.background=hex; cpHex.value=hex.toUpperCase();
+    var rgb2=hsvToRgb(cpH,cpS,cpV);
+    cpSetIf(cpR,Math.round(rgb2.r)); cpSetIf(cpG,Math.round(rgb2.g)); cpSetIf(cpB,Math.round(rgb2.b));
+    cpSetIf(cpHh,Math.round(cpH)); cpSetIf(cpSs,Math.round(cpS*100)); cpSetIf(cpVv,Math.round(cpV*100));
+    if(live && cpCb){ clearTimeout(cpDeb); cpDeb=setTimeout(function(){ if(cpCb)cpCb(hex); },180); }
+  }
+  function openColor(hex, cb, opts){
+    cpCb=cb; cpOpts=opts||null;
+    var rgb=hexToRgb(hex||"#ffaa33"), hsv=rgbToHsv(rgb.r,rgb.g,rgb.b);
+    cpH=hsv.h; cpS=hsv.s; cpV=hsv.v; cpVal.value=Math.round(cpV*100);
+    cpUpdate(false);
+    var w=cpOpts && cpOpts.white;
+    if(w){
+      cpTabs.style.display="";
+      if(w.bright){ cpWBright.min=w.bright.min; cpWBright.max=w.bright.max; cpWBright.value=w.bright.value;
+        cpWBright.closest(".cp-wrow").style.display=""; } else { cpWBright.closest(".cp-wrow").style.display="none"; }
+      if(w.temp){ cpWTemp.min=w.temp.min; cpWTemp.max=w.temp.max; cpWTemp.value=w.temp.value;
+        cpWTemp.closest(".cp-wrow").style.display=""; } else { cpWTemp.closest(".cp-wrow").style.display="none"; }
+      cpSetTab(cpOpts.startTab==="white"?"white":"colour");
+    } else {
+      cpTabs.style.display="none"; cpPaneColour.style.display=""; cpPaneWhite.style.display="none";
+    }
+    cpicker.classList.add("show"); updateScrollLock();
+  }
+  function closeColor(){ cpicker.classList.remove("show"); cpCb=null; cpOpts=null; updateScrollLock(); }
+  function cpWheelPick(e){
+    var r=cpWheel.getBoundingClientRect();
+    var dx=e.clientX-(r.left+r.width/2), dy=e.clientY-(r.top+r.height/2);
+    var rad=Math.min(r.width,r.height)/2;
+    var dist=Math.sqrt(dx*dx+dy*dy);
+    cpS=Math.max(0,Math.min(1,dist/rad));
+    cpH=(Math.atan2(dx,-dy)*180/Math.PI+360)%360;   // 0° сверху, по часовой
+    cpUpdate(true);
+  }
+  cpWheel.addEventListener("pointerdown",function(e){ e.preventDefault(); cpWheelPick(e);
+    function mv(ev){cpWheelPick(ev);}
+    function up(){document.removeEventListener("pointermove",mv);document.removeEventListener("pointerup",up);document.removeEventListener("pointercancel",up);}
+    document.addEventListener("pointermove",mv);document.addEventListener("pointerup",up);document.addEventListener("pointercancel",up);});
+  cpVal.addEventListener("input",function(){cpV=(+cpVal.value)/100;cpUpdate(true);});
+  cpHex.addEventListener("change",function(){var rgb=hexToRgb(cpHex.value),hsv=rgbToHsv(rgb.r,rgb.g,rgb.b);
+    cpH=hsv.h;cpS=hsv.s;cpV=hsv.v;cpVal.value=Math.round(cpV*100);cpUpdate(true);});
+  function cpFromRgb(){var rgb={r:cpClamp(cpR.value,0,255),g:cpClamp(cpG.value,0,255),b:cpClamp(cpB.value,0,255)};
+    var hsv=rgbToHsv(rgb.r,rgb.g,rgb.b);cpH=hsv.h;cpS=hsv.s;cpV=hsv.v;cpVal.value=Math.round(cpV*100);cpUpdate(true);}
+  [cpR,cpG,cpB].forEach(function(el){el.addEventListener("input",cpFromRgb);});
+  function cpFromHsv(){cpH=cpClamp(cpHh.value,0,360);cpS=cpClamp(cpSs.value,0,100)/100;cpV=cpClamp(cpVv.value,0,100)/100;
+    cpVal.value=Math.round(cpV*100);cpUpdate(true);}
+  [cpHh,cpSs,cpVv].forEach(function(el){el.addEventListener("input",cpFromHsv);});
+  cpTabs.addEventListener("click",function(e){ var b=e.target.closest(".cp-tab"); if(b) cpSetTab(b.dataset.cptab); });
+  cpWBright.addEventListener("input",function(){ if(cpOpts&&cpOpts.white&&cpOpts.white.bright){ clearTimeout(cpWDeb);
+    var v=cpWBright.value; cpWDeb=setTimeout(function(){ cpOpts.white.bright.onChange(v); },160); } });
+  cpWTemp.addEventListener("input",function(){ if(cpOpts&&cpOpts.white&&cpOpts.white.temp){ clearTimeout(cpWDeb);
+    var v=cpWTemp.value; cpWDeb=setTimeout(function(){ cpOpts.white.temp.onChange(v); },160); } });
+  cpPresets.innerHTML=CP_PRESETS.map(function(c){return '<button class="cp-sw" style="background:'+c+'" data-c="'+c+'"></button>';}).join("");
+  cpPresets.addEventListener("click",function(e){var b=e.target.closest(".cp-sw");if(!b)return;
+    var rgb=hexToRgb(b.dataset.c),hsv=rgbToHsv(rgb.r,rgb.g,rgb.b);cpH=hsv.h;cpS=hsv.s;cpV=hsv.v;cpVal.value=Math.round(cpV*100);cpUpdate(true);});
+  document.getElementById("cp-apply").addEventListener("click",function(){
+    var whiteTab=cpPaneWhite.style.display!=="none";
+    if(cpCb && !whiteTab) cpCb(cpHexNow());   // цвет применяем только на вкладке «Цвет»
+    closeColor();
+  });
+  document.getElementById("cp-close").addEventListener("click",closeColor);
+  cpicker.addEventListener("click",function(e){ if(e.target===cpicker) closeColor(); });
+
+  // ---- инфо об устройстве по тапу на шапку карточки --------------------
+  var cardinfo=document.getElementById("cardinfo");
+  var ciTitle=document.getElementById("ci-title"), ciBody=document.getElementById("ci-body");
+  var ciObj=null, ciTimer=null;
+  var CHART_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-6 4 4 6-8"/></svg>';
+  function ciFetch(){ return fetch(A("objectinfo?object="+encodeURIComponent(ciObj)),{cache:"no-store",credentials:"same-origin"}).then(apiJson); }
+  function openCardInfo(obj, title){
+    if(!obj) return;
+    ciObj=obj; ciTitle.textContent=title||obj;
+    ciBody.innerHTML='<div class="loading"><div class="dot live"></div>Загрузка…</div>';
+    cardinfo.classList.add("show"); updateScrollLock();
+    ciFetch().then(function(j){
+        if(!j||!j.ok){ ciBody.innerHTML='<div class="empty">Нет данных</div>'; return; }
+        ciTitle.textContent=j.title||title||obj;
+        var props=j.properties||[];
+        if(!props.length){ ciBody.innerHTML='<div class="empty">Свойства не найдены</div>'; return; }
+        ciBody.innerHTML='<div class="ci-sub">'+esc(obj)+'</div>'+props.map(function(p){
+          return '<div class="ci-row" data-ciprop="'+esc(p.name)+'"><span class="ci-name">'+esc(p.name)+'</span>'
+            +'<span class="ci-val">'+esc(p.value==null||p.value===""?"—":p.value)+'</span>'
+            +(p.history?'<button class="ci-chart" data-chart="'+esc(obj+"."+p.name)+'" data-title="'+esc((j.title||title||obj)+" · "+p.name)+'" aria-label="График">'+CHART_SVG+'</button>':'')
+            +'</div>';
+        }).join("");
+        ciBody.querySelectorAll(".ci-chart").forEach(function(b){
+          b.addEventListener("click",function(){ openChart(b.dataset.chart, b.dataset.title); });
+        });
+      }).catch(function(){ ciBody.innerHTML='<div class="empty">Ошибка загрузки</div>'; });
+    clearInterval(ciTimer);
+    ciTimer=setInterval(refreshCardInfo, INFO_POLL_MS);
+  }
+  function refreshCardInfo(){
+    if(!ciObj) return;
+    ciFetch().then(function(j){
+      if(!j||!j.ok||!j.properties) return;
+      j.properties.forEach(function(p){
+        var row=ciBody.querySelector('[data-ciprop="'+(window.CSS&&CSS.escape?CSS.escape(p.name):p.name)+'"]');
+        if(row){ var v=row.querySelector(".ci-val"); if(v) v.textContent=(p.value==null||p.value==="")?"—":p.value; }
+      });
+    }).catch(function(){});
+  }
+  function closeCardInfo(){ cardinfo.classList.remove("show"); clearInterval(ciTimer); ciTimer=null; ciObj=null; updateScrollLock(); }
+  document.getElementById("ci-close").addEventListener("click",closeCardInfo);
+  cardinfo.addEventListener("click",function(e){ if(e.target===cardinfo) closeCardInfo(); });
+
+  // ---- живая камера go2rtc (модалка с webrtc.html) --------------------
+  var rtcModal=document.getElementById("webrtc"), rtcFrame=document.getElementById("rtc-frame"), rtcTitle=document.getElementById("rtc-title");
+  function openWebrtc(base, src, title){
+    if(!base||!src) return;
+    rtcTitle.textContent=title||src;
+    rtcFrame.src=String(base).replace(/\/+$/,"")+"/webrtc.html?src="+encodeURIComponent(src)+"&mode=webrtc,mse,mp4,mjpeg&media=video";
+    rtcModal.classList.add("show"); updateScrollLock();
+  }
+  function closeWebrtc(){ rtcModal.classList.remove("show"); rtcFrame.src="about:blank"; updateScrollLock(); }
+  document.getElementById("rtc-close").addEventListener("click",closeWebrtc);
+  rtcModal.addEventListener("click",function(e){ if(e.target===rtcModal) closeWebrtc(); });
+
+  function modalOpen(){
+    return (cmodal && cmodal.classList.contains("show"))
+        || (cardinfo && cardinfo.classList.contains("show"))
+        || (rtcModal && rtcModal.classList.contains("show"))
+        || (typeof edEl!=="undefined" && edEl && edEl.classList.contains("show"))
+        || (typeof setEl!=="undefined" && setEl && setEl.classList.contains("show"))
+        || (chatEl && chatEl.classList.contains("show"))
+        || (cpicker && cpicker.classList.contains("show"));
+  }
+  function updateScrollLock(){ document.documentElement.style.overflow = modalOpen() ? "hidden" : ""; }
+
+  // ---- heartbeat -------------------------------------------------------
+  function health(){
+    var fresh=(Date.now()-lastOk)<STALE_MS;
+    if(usingMock){ hdot.className="dot"; hstat.textContent="демо"; }
+    else if(wsConnected){ hdot.className="dot ws"; hstat.textContent="live"; }
+    else { hdot.className="dot "+(fresh?"live":"stale"); hstat.textContent=fresh?"на связи":"нет связи"; }
+    document.getElementById("foot").textContent=lastOk?new Date(lastOk).toLocaleTimeString("ru-RU"):"—";
+  }
+
+  // ---- цикл опроса -----------------------------------------------------
+  function refresh(){
+    if(inflight||modalOpen())return; inflight=true;
+    var btn=document.getElementById("refresh"); btn.classList.add("spin");
+    getState().then(function(data){
+      usingMock=false; lastOk=Date.now(); app.classList.remove("demo");
+      banner.classList.remove("show");
+      // Вариант A: внешний WS-адрес применяем ТОЛЬКО когда панель открыта не по локальному хосту.
+      // Дома (приватный IP / .local / localhost) — авто-сборка, настройка не нужна.
+      var extUrl = (data.ws_url && !isHomeHost()) ? data.ws_url : "";
+      if(extUrl!==WS_URL){ WS_URL=extUrl; wsReconnect(); }
+      render(data); health();
+    }).catch(function(){
+      if(!usingMock){ // первый провал -> демо-режим
+        usingMock=true;
+        banner.innerHTML='API недоступен — показаны демо-данные. Проверьте доступ к api.php/module/lovelace/ или '
+          +'<a href="/popup/users.html" target="_top" style="color:var(--active);text-decoration:underline">войдите заново</a>.';
+        banner.classList.add("show");
+        render(MOCK); lastOk=Date.now(); app.classList.add("demo");
+      }
+      health();
+    }).then(function(){inflight=false;btn.classList.remove("spin");});
+  }
+
+  document.getElementById("refresh").addEventListener("click",refresh);
+
+  // ---- WebSocket: живые обновления (как в dashboard_pro) ----------------
+  function wsScheduleRefresh(){
+    clearTimeout(wsRefreshT);
+    wsRefreshT=setTimeout(function(){
+      if(writesInflight>0){ wsScheduleRefresh(); return; }   // не мешаем записи -> ждём её завершения
+      refresh();
+    }, 350);
+  }
+  // «Домашний» хост: приватные диапазоны, loopback, .local, localhost -> используем авто-адрес WS.
+  function isHomeHost(){
+    var h=(location.hostname||"").toLowerCase();
+    if(h==="localhost"||h==="127.0.0.1"||h==="::1") return true;
+    if(/\.local$/.test(h)) return true;
+    if(/^10\./.test(h)) return true;
+    if(/^192\.168\./.test(h)) return true;
+    if(/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true;   // 172.16.0.0 – 172.31.255.255
+    if(/^169\.254\./.test(h)) return true;                   // link-local
+    if(/^fe80:/i.test(h) || /^fc/i.test(h) || /^fd/i.test(h)) return true;  // IPv6 link/unique-local
+    return false;
+  }
+  function wsReconnect(){ try{ if(wsSock){ wsSock.onclose=null; wsSock.close(); } }catch(e){} wsSock=null; wsConnected=false; if(wsTimer){clearTimeout(wsTimer);wsTimer=null;} initWS(); }
+  function initWS(){
+    if(WS_OFF || !WS_ENABLE || !("WebSocket" in window)) return;   // WS_OFF = отключён в настройках Majordomo
+    var proto=(location.protocol==="https:")?"wss:":"ws:";
+    var url=WS_URL || (proto+"//"+location.hostname+":"+WS_PORT+WS_PATH);
+    try{ wsSock=new WebSocket(url); }catch(e){ return; }
+    wsSock.onopen=function(){ wsConnected=true; wsEverConnected=true; wsFails=0; if(wsTimer){clearTimeout(wsTimer);wsTimer=null;}
+      if(WS_DEBUG){ try{ console.log("[WS] открыт:", url); }catch(e){} }
+      if(WS_SUBSCRIBE){ try{ wsSock.send(WS_SUBSCRIBE); if(WS_DEBUG) console.log("[WS] отправлена подписка:", WS_SUBSCRIBE); }catch(e){} }
+      health(); };
+    wsSock.onmessage=function(msg){
+      if(WS_DEBUG){ try{ console.log("[WS]", msg.data); }catch(e){} }
+      var d=msg.data;
+      if(d===undefined || d===null || d==="") return;
+      var s=(typeof d==="string")?d:"";
+      if(s==="ping"||s==="pong"||s==="1"||s==="2") return;              // heartbeat
+      if(s.indexOf('"action":"subscribed"')>=0) return;                // подтверждение подписки — не обновляемся
+      // "devices"/"PostProperty"/прочее = что-то изменилось -> обновить (дебаунс 250мс)
+      wsScheduleRefresh();
+    };
+    wsSock.onclose=function(){
+      wsConnected=false; health();
+      if(wsEverConnected){ wsTimer=setTimeout(initWS,5000); return; }   // был онлайн — переподключаемся
+      wsFails++;
+      if(wsFails<3) wsTimer=setTimeout(initWS, 3000*wsFails);           // не поднялся — 3 попытки, потом тишина
+      // иначе сдаёмся: панель остаётся на опросе, консоль не спамим
+    };
+    wsSock.onerror=function(){ try{wsSock.close();}catch(e){} };
+  }
+
+  // Все карточки — внешние (tools/cards/index.json). Первый рендер запускаем
+  // ПОСЛЕ загрузки карточек, чтобы типы уже были известны (без мигания).
+  function startApp(){
+    if(startApp.done) return; startApp.done=true;
+    edApi("settings", DEV?"":"&want_dev=1").then(function(j){ if(j&&j.ok){ IS_ADMIN=!!j.is_admin; wsCfgUrl=j.ws_url||""; if(j.uid!=null && j.uid!=="") MY_UID=String(j.uid); if(j.dev){ DEV=j.dev; try{ localStorage.setItem("lvl_dev",DEV); }catch(e){} } } }).catch(function(){});   // права/настройки/uid + автозапоминание устройства
+    edApi("prefs").then(function(j){ if(j&&j.ok&&j.prefs){ themeSync=!!j.prefs.themeSync; if(themeSync&&j.prefs.theme) applyTheme(j.prefs.theme,false); } }).catch(function(){});   // тема из БД, если синхронизация вкл
+    refresh();
+    initWS();
+    // при живом WS опрашиваем редко (страховка ~30с), иначе как обычно
+    pollTimer=setInterval(function(){
+      if(wsConnected && (Date.now()-lastOk)<30000) return;
+      refresh();
+    }, POLL_MS);
+    setInterval(health,3000);
+    // keep-alive: продлеваем сессию Majordomo (expire = +1ч от каждого запроса),
+    // чтобы панель не разлогинивалась при живом WS/редком опросе. Только когда вкладка видима.
+    setInterval(function(){
+      if(document.visibilityState==="hidden") return;
+      if(TOKEN) return;   // токен-режим не использует сессию
+      edApi("checkAuth").catch(function(){});
+    }, 10*60*1000);
+    // и пинг при возврате на вкладку (телефон разблокировали / переключились назад)
+    document.addEventListener("visibilitychange",function(){
+      if(document.visibilityState!=="visible") return;
+      if(!TOKEN) edApi("checkAuth").catch(function(){});   // продлить сессию
+      refresh();                                            // подтянуть данные
+      if(WS_ENABLE && !WS_OFF && !wsConnected) wsReconnect();  // оживить WS, если отвалился
+    });
+    // уведомления из shoutbox — только в отдельном окне (в iframe их показывает родная страница)
+    if(noteStandalone && !TOKEN){ pollShout(); setInterval(pollShout, 7000); }
+  }
+  (function loadCards(){
+    fetch("cards/index.json",{cache:"no-store"}).then(apiJson).then(function(j){
+      var list=(j&&j.cards)||[];
+      if(!list.length){ startApp(); return; }
+      var left=list.length;
+      function one(){ if(--left<=0) startApp(); }
+      list.forEach(function(src){
+        var s=document.createElement("script");
+        s.src="cards/"+src+"?_="+Date.now();
+        s.onload=one; s.onerror=one;   // онэррор тоже считаем, чтобы не зависнуть
+        document.head.appendChild(s);
+      });
+    }).catch(function(){ startApp(); });
+  })();
+  setTimeout(startApp, 2000);   // подстраховка: не ждать вечно, если манифест/карточка не ответили
+
+  // ======================================================================
+  //  РЕДАКТОР ПАНЕЛИ  (пишет tools/dashboard.config.json)
+  // ======================================================================
+  var edEl=document.getElementById("editor");
+  var edBody=document.getElementById("ed-body");
+
+  // ---- экран НАСТРОЕК (тема/WS/токены) — отдельно от редактора раскладки ----
+  var setEl=document.getElementById("settingsPanel");
+  var setBody=document.getElementById("set-body");
+  function openSettings(){
+    var remembered = !!DEV;
+    setBody.innerHTML='<div class="ed-titlebar">'
+      +'<label class="ed-check"><input type="checkbox" id="set-themesync"'+(themeSync?" checked":"")+'> Синхронизировать тему (хранить в БД)</label>'
+      +'<div class="set-remember" style="margin-top:16px">'
+        +'<label style="display:block;margin-bottom:6px">Это устройство</label>'
+        +'<button id="set-remember-btn" class="ed-btn'+(remembered?"":" ed-primary")+'">'+(remembered?"✓ Устройство запомнено":"Запомнить это устройство")+'</button>'
+        +'<div style="font-size:11px;color:var(--muted);margin-top:6px">Панель не будет разлогинивать это устройство ~30 дней.'+(remembered?' <a href="#" id="set-forget" style="color:var(--active)">Забыть</a>':'')+'</div>'
+      +'</div>'
+      +(IS_ADMIN?('<label style="display:block;margin-top:16px">Внешний WS-адрес <span style="color:var(--muted);font-weight:400">(для доступа снаружи; дома не нужен)</span></label>'
+        +'<input id="set-wsurl" value="'+esc(wsCfgUrl)+'" placeholder="wss://мойдомен/majordomo">'
+        +'<div id="ed-tokens" class="ed-tokens"></div>'):'')
+      +'</div>';
+    if(IS_ADMIN && document.getElementById("ed-tokens")) renderTokens();
+    var rb=document.getElementById("set-remember-btn");
+    if(rb) rb.addEventListener("click",function(){
+      if(DEV){ flash("Устройство уже запомнено"); return; }
+      rb.disabled=true; rb.textContent="…";
+      edApi("settings","&want_dev=1").then(function(j){
+        if(j && j.dev){ DEV=j.dev; try{ localStorage.setItem("lvl_dev",DEV); }catch(e){} flash("Устройство запомнено на 30 дней"); openSettings(); }
+        else { rb.disabled=false; rb.textContent="Запомнить это устройство"; flash("Не удалось (нужен вход)"); }
+      }).catch(function(){ rb.disabled=false; rb.textContent="Запомнить это устройство"; flash("Ошибка"); });
+    });
+    var fg=document.getElementById("set-forget");
+    if(fg) fg.addEventListener("click",function(e){ e.preventDefault();
+      if(!confirm("Забыть это устройство и выйти? Панель разлогинится.")) return;
+      var tok=DEV; DEV="";
+      try{ localStorage.removeItem("lvl_dev"); }catch(_){}
+      var done=function(){ try{ window.top.location.href="/?logoff=1"; }catch(_){ location.href="/?logoff=1"; } };
+      if(tok){ edApi("device_forget","&dev="+encodeURIComponent(tok)).then(done).catch(done); }
+      else done();
+    });
+    setEl.classList.add("show"); updateScrollLock();
+  }
+  function closeSettings(){ setEl.classList.remove("show"); updateScrollLock(); }
+  function saveSettings(){
+    if(IS_ADMIN){ var w=document.getElementById("set-wsurl"); if(w && (w.value||"")!==wsCfgUrl){ wsCfgUrl=(w.value||"").trim(); edPost("savesettings",{ws_url:wsCfgUrl}).then(function(){refresh();}).catch(function(){}); } }
+    var ts=document.getElementById("set-themesync");
+    if(ts){ themeSync=ts.checked; if(themeSync) pushPrefs(); else edPost("saveprefs",{prefs:{themeSync:false}}).catch(function(){}); }
+    closeSettings();
+  }
+
+  var edModel={rooms:[]};      // рабочая модель: rooms[].cards[]  (карточка = объект + один контрол)
+  var edTargetUser=MY_UID;     // чью раскладку правит админ (для не-админа = свой)
+  var edUsers=[];              // список пользователей (для селектора, админ)
+  var wsCfgUrl="";             // сохранённый внешний WS-адрес (настройка модуля, только админ)
+  var edRoomIdx=0;             // индекс редактируемой комнаты (одна за раз)
+  var edClipboard=null;        // буфер копирования карточки
+  var edObjects=[];            // [{id,title}]
+  var edPropCache={};          // object -> [props]
+  var ICON_OPTS=["bulb","power","thermo","droplet","motion","camera","cloud","blinds","fan","plug","door","window","lock","fire","bell","tv","music","battery","wifi","sun","moon","bolt","clock","shield","leaf","heart","gauge","coffee","garage","dot"];
+  var TYPE_OPTS=["switch","slider","sensor","text","button","thermostat","cover","rgb","light","camera","weather","webrtc","calendar","clock","spacer"];
+
+  function edApi(op,qs){qs=qs||"";if(qs&&qs.charAt(0)==="&")qs="?"+qs.slice(1);return fetch(A(op+qs),{cache:"no-store",credentials:"same-origin"}).then(apiJson);}
+  function edSave(model){var body=Object.assign({},model,{user:edTargetUser});return fetch(A("save"),{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(body)}).then(apiJson);}
+  function edPost(op,body){return fetch(A(op),{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})}).then(apiJson);}
+  function num(v){v=parseFloat(v);return isNaN(v)?0:v;}
+  function swap(a,i,j){var t=a[i];a[i]=a[j];a[j]=t;}
+
+  function flattenCard(devId,devTitle,devIcon,ctrl){
+    var c={object:devId,title:devTitle||"",icon:devIcon||"dot",type:ctrl.type||"sensor"};
+    var plug=Lovelace.cards[ctrl.type];
+    if(plug && plug.fields) plug.fields.forEach(function(fl){ if(ctrl[fl.k]!=null) c[fl.k]=ctrl[fl.k]; });
+    // совместимость: старый формат шторы (nested actions) -> плоские m_*
+    if(ctrl.actions){
+      if(ctrl.actions.open)c.m_open=ctrl.actions.open.method;
+      if(ctrl.actions.stop)c.m_stop=ctrl.actions.stop.method;
+      if(ctrl.actions.close)c.m_close=ctrl.actions.close.method;
+    }
+    return c;
+  }
+  function configToModel(cfg){
+    var rooms=[];
+    (cfg.rooms||[]).forEach(function(r){
+      var cards=[];
+      (r.devices||[]).forEach(function(d){(d.controls||[]).forEach(function(ct){var card=flattenCard(d.id,d.title,d.icon,ct); if(d.w!=null)card.w=String(d.w); if(d.h!=null)card.h=(d.h==="tall"?"2":(d.h==="xtall"?"3":String(d.h))); cards.push(card);});});
+      rooms.push({id:r.id||("room"+Math.random().toString(36).slice(2,7)),title:r.title||"",cards:cards});
+    });
+    return {title:(cfg.title||""), hideAll:!!cfg.hideAllTab, rooms:rooms};
+  }
+  function cardToDevice(c){
+    var plug=Lovelace.cards[c.type];
+    var pctrl={type:c.type};
+    if(plug){
+      (plug.fields||[]).forEach(function(fl){ if(c[fl.k]!=null&&c[fl.k]!=="") pctrl[fl.k]=(fl.t==="num"?num(c[fl.k]):c[fl.k]); });
+      if(plug.reads)   pctrl.reads  =(typeof plug.reads==="function")  ?plug.reads(c)  :plug.reads;
+      if(plug.writes)  pctrl.writes =(typeof plug.writes==="function") ?plug.writes(c) :plug.writes;
+      if(plug.methods) pctrl.methods=(typeof plug.methods==="function")?plug.methods(c):plug.methods;
+    }
+    var dev={id:c.object||"",title:c.title||"",icon:c.icon||"dot",controls:[pctrl]};
+    if(c.w && c.w!=="1") dev.w=c.w;   // "2".."4" | "full"
+    if(c.h && c.h!=="1") dev.h=c.h;   // "2" | "3"
+    return dev;
+  }
+  function modelToConfig(model){
+    return {title:(model.title||""), hideAllTab:!!model.hideAll, rooms:(model.rooms||[]).map(function(r){
+      return {id:r.id,title:r.title,devices:(r.cards||[]).filter(function(c){
+        return c.object || c.type==="spacer" || (Lovelace.cards[c.type] && Lovelace.cards[c.type].noObject);
+      }).map(cardToDevice)};
+    })};
+  }
+  function fieldsFor(type){
+    if(type==="spacer") return [];
+    var f=[{k:"title",l:"Название",t:"text"},{k:"icon",l:"Иконка",t:"select",o:ICON_OPTS},
+      {k:"w",l:"Ширина",t:"seg",o:["1","2","3","4","full"]},{k:"h",l:"Высота",t:"seg",o:["1","2","3"]}];
+    var plug=Lovelace.cards[type];
+    if(plug && plug.fields) return f.concat(plug.fields);
+    return f;
+  }
+  function optionList(arr,val){return arr.map(function(o){return '<option value="'+esc(o)+'"'+(o===val?" selected":"")+'>'+esc(o)+'</option>';}).join("");}
+  function allTypes(){var s=TYPE_OPTS.slice(); Object.keys(Lovelace.cards).forEach(function(t){if(s.indexOf(t)<0)s.push(t);}); return s;}
+  function ensureProps(obj,cb){
+    if(!obj){cb([]);return;}
+    if(edPropCache[obj]){cb(edPropCache[obj]);return;}
+    edApi("properties","&object="+encodeURIComponent(obj)).then(function(j){
+      edPropCache[obj]=(j&&j.ok&&j.properties)?j.properties:[]; cb(edPropCache[obj]);
+    }).catch(function(){cb([]);});
+  }
+  function fillPropSelect(sel,props){
+    var cur=sel.getAttribute("data-cur")||"";
+    var opts='<option value="">— свойство —</option>', has=false;
+    props.forEach(function(p){if(p===cur)has=true; opts+='<option value="'+esc(p)+'"'+(p===cur?" selected":"")+'>'+esc(p)+'</option>';});
+    if(cur&&!has) opts='<option value="'+esc(cur)+'" selected>'+esc(cur)+'</option>'+opts;
+    sel.innerHTML=opts;
+  }
+  function renderCard(ci,card){
+    var plug=Lovelace.cards[card.type];
+    var noObj=(card.type==="spacer") || (plug && plug.noObject);
+    var objOpts='<option value="">— объект —</option>'+edObjects.map(function(o){return '<option value="'+esc(o.id)+'"'+(o.id===card.object?" selected":"")+'>'+esc(o.title)+' ('+esc(o.id)+')</option>';}).join("");
+    var objSel=noObj?'':('<select class="ed-obj" data-f="object">'+objOpts+'</select>');
+    var h='<div class="ed-card" data-ci="'+ci+'"><div class="ed-card-top">'
+      +objSel
+      +'<select class="ed-type" data-f="type">'+optionList(allTypes(),card.type)+'</select>'
+      +'<button class="ed-mini" data-act="cup">↑</button><button class="ed-mini" data-act="cdown">↓</button>'
+      +'<button class="ed-mini" data-act="ccopy" title="Копировать"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>'
+      +'<button class="ed-mini" data-act="cpaste" title="Вставить после"'+(edClipboard?"":" disabled")+'><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg></button>'
+      +'<button class="ed-mini del" data-act="cdel">✕</button></div><div class="ed-grid">';
+    fieldsFor(card.type).forEach(function(fl){
+      var val=card[fl.k]==null?"":card[fl.k];
+      h+='<div class="ed-field"><label>'+esc(fl.l)+'</label>';
+      if(fl.t==="select") h+='<select data-f="'+fl.k+'">'+optionList(fl.o,val)+'</select>';
+      else if(fl.t==="seg"){
+        h+='<div class="ed-seg" data-f="'+fl.k+'">'+fl.o.map(function(o){
+          var act=(String(val)===String(o)||(val===""&&o===fl.o[0]));
+          return '<button type="button" class="ed-segbtn'+(act?" active":"")+'" data-val="'+esc(o)+'">'+esc(o)+'</button>';
+        }).join("")+'</div>';
+      }
+      else if(fl.t==="multi"){
+        var selm=(val?String(val).split(","):[]);
+        h+='<div class="ed-multi" data-f="'+fl.k+'">'+fl.o.map(function(o){
+          var ov=(o&&typeof o==="object")?o.v:o, ol=(o&&typeof o==="object")?o.l:o;
+          var act=selm.indexOf(String(ov))>=0;
+          return '<button type="button" class="ed-segbtn'+(act?" active":"")+'" data-val="'+esc(ov)+'">'+esc(ol)+'</button>';
+        }).join("")+'</div>';
+      }
+      else if(fl.t==="prop") h+='<select data-f="'+fl.k+'" data-prop-for="1" data-obj="'+esc(card.object||"")+'" data-cur="'+esc(val)+'"><option value="'+esc(val)+'">'+esc(val||"—")+'</option></select>';
+      else h+='<input data-f="'+fl.k+'" type="'+(fl.t==="num"?"number":"text")+'" value="'+esc(val)+'">';
+      h+='</div>';
+    });
+    h+='</div>';
+    if(edModel.rooms.length>1){
+      var mv='<option value="">↦ перенести в комнату…</option>'+edModel.rooms.map(function(r,i){
+        return i===edRoomIdx?"":'<option value="'+i+'">'+esc(r.title||("Комната "+(i+1)))+'</option>';}).join("");
+      h+='<div class="ed-move"><select class="ed-moveto" data-ci="'+ci+'">'+mv+'</select></div>';
+    }
+    return h+'</div>';
+  }
+  function roomOptions(sel){
+    return edModel.rooms.map(function(r,i){return '<option value="'+i+'"'+(i===sel?" selected":"")+'>'+esc(r.title||("Комната "+(i+1)))+'</option>';}).join("");
+  }
+  // авто-раскладка: добавляет недостающие комнаты/устройства, не стирая правку
+  function mergeDiscovered(discRooms){
+    (discRooms||[]).forEach(function(dr){
+      var room=null;
+      for(var i=0;i<edModel.rooms.length;i++){
+        if((edModel.rooms[i].title||"").toLowerCase()===(dr.title||"").toLowerCase()){room=edModel.rooms[i];break;}
+      }
+      if(!room){ room={id:dr.id||("room"+Date.now()+Math.random().toString(36).slice(2,5)),title:dr.title||"",cards:[]}; edModel.rooms.push(room); }
+      (dr.devices||[]).forEach(function(d){
+        (d.controls||[]).forEach(function(ct){
+          var card=flattenCard(d.id,d.title,d.icon,ct);
+          var dup=room.cards.some(function(c){return c.object===card.object && c.type===card.type && c.prop===card.prop;});
+          if(!dup) room.cards.push(card);
+        });
+      });
+    });
+  }
+  function doAutoLayout(){
+    if(!confirm("Добавить недостающие комнаты и устройства из авто-обнаружения Majordomo? Текущие карточки не удаляются.")) return;
+    edApi("discover").then(function(j){
+      if(!j||!j.ok){ flash((j&&j.error)?j.error:"Авто-обнаружение недоступно"); return; }
+      mergeDiscovered(j.rooms||[]);
+      if(edRoomIdx>=edModel.rooms.length) edRoomIdx=0;
+      renderEditor();
+    }).catch(function(){ flash("Ошибка авто-обнаружения"); });
+  }
+  function renderEditor(){
+    var titleBar='<div class="ed-titlebar">'
+      +((IS_ADMIN && edUsers.length)?('<label>Чья раскладка</label><select id="ed-user" class="ed-userSel">'
+        +edUsers.map(function(u){return '<option value="'+u.id+'"'+(String(u.id)===String(edTargetUser)?" selected":"")+'>'+esc(u.login)+(u.has_layout?"":" · нет своей")+'</option>';}).join("")
+        +'</select>'):'')
+      +'<label style="margin-top:10px">Заголовок панели</label>'
+      +'<input id="ed-paneltitle" value="'+esc(edModel.title||"")+'" placeholder="Дом" maxlength="80">'
+      +'<label class="ed-check"><input type="checkbox" id="ed-hideall"'+(edModel.hideAll?" checked":"")+'> Скрыть вкладку «Все»</label>'
+      +'</div>';
+    if(!edModel.rooms.length){
+      edBody.innerHTML=titleBar+'<div class="ed-bar"><button class="ed-add" data-act="radd">+ комната</button>'
+        +'<button class="ed-add" data-act="auto">⚡ Авто-раскладка</button></div>';
+      wireEditor(); return;
+    }
+    if(edRoomIdx>=edModel.rooms.length) edRoomIdx=Math.max(0,edModel.rooms.length-1);
+    var room=edModel.rooms[edRoomIdx];
+    var chips=edModel.rooms.map(function(r,i){
+      return '<button class="ed-rchip'+(i===edRoomIdx?" active":"")+'" data-ri="'+i+'">'+esc(r.title||("Комната "+(i+1)))+'</button>';
+    }).join("");
+    var h=titleBar
+      +'<div class="ed-rooms">'+chips+'</div>'
+      +'<div class="ed-bar">'
+      +'<button class="ed-mini" data-act="rleft" title="Переместить левее">◀</button>'
+      +'<button class="ed-mini" data-act="rright" title="Переместить правее">▶</button>'
+      +'<span class="ed-barsp"></span>'
+      +'<button class="ed-mini" data-act="auto" title="Авто-раскладка из обнаружения">⚡</button>'
+      +'<button class="ed-mini" data-act="radd" title="Добавить комнату">＋</button>'
+      +'<button class="ed-mini del" data-act="rdel" title="Удалить комнату">✕</button></div>';
+    h+='<div class="ed-room"><div class="ed-room-head"><input class="ed-rtitle" value="'+esc(room.title)+'" placeholder="Название комнаты"></div>';
+    room.cards.forEach(function(card,ci){h+=renderCard(ci,card);});
+    h+='<button class="ed-add" data-act="cadd">+ карточка</button></div>';
+    var _prevRooms=edBody.querySelector(".ed-rooms");
+    var _prevScroll=_prevRooms?_prevRooms.scrollLeft:0;
+    edBody.innerHTML=h;
+    var _newRooms=edBody.querySelector(".ed-rooms");
+    if(_newRooms){
+      _newRooms.scrollLeft=_prevScroll;                       // не «убегать» в начало
+      var _act=_newRooms.querySelector(".ed-rchip.active");   // держать активный чип видимым
+      if(_act){
+        var l=_act.offsetLeft, r=l+_act.offsetWidth;
+        if(l < _newRooms.scrollLeft) _newRooms.scrollLeft=l-8;
+        else if(r > _newRooms.scrollLeft+_newRooms.clientWidth) _newRooms.scrollLeft=r-_newRooms.clientWidth+8;
+      }
+    }
+    wireEditor();
+    edBody.querySelectorAll("select[data-prop-for]").forEach(function(sel){
+      ensureProps(sel.getAttribute("data-obj"),function(props){fillPropSelect(sel,props);});
+    });
+  }
+  function kioskLink(tok){ return location.origin + location.pathname + "?token=" + encodeURIComponent(tok); }
+  function tokSeen(ts){ if(!ts) return "ещё не подключалось"; var d=new Date(ts*1000); return "был(о): "+d.toLocaleString(); }
+  function renderTokens(){
+    var box=document.getElementById("ed-tokens"); if(!box) return;
+    var userSel='';
+    if(edUsers.length){
+      userSel='<label style="font-size:11px;color:var(--muted)">Чью раскладку показывать</label>'+
+        '<select id="ed-tk-user" class="ed-userSel">'+edUsers.map(function(u){
+          return '<option value="'+u.id+'"'+(String(u.id)==="0"?" selected":"")+'>'+esc(u.login)+(u.has_layout?"":" · нет своей")+'</option>';
+        }).join("")+'</select>';
+    }
+    box.innerHTML='<div class="ed-tk-h">Токены доступа (настенные устройства)</div><div class="ed-tk-list">Загрузка…</div>'+
+      '<div class="ed-tk-new">'+
+      '<input id="ed-tk-title" placeholder="Название устройства (напр. Планшет в прихожей)" maxlength="100">'+
+      userSel+
+      '<label class="ed-check"><input type="checkbox" id="ed-tk-ctrl"> Разрешить управление</label>'+
+      '<button class="ed-btn" id="ed-tk-add">Создать токен</button>'+
+      '<div id="ed-tk-newlink" class="ed-tk-link" style="display:none"></div></div>';
+    var list=box.querySelector(".ed-tk-list");
+    if(!edUsers.length){ edApi("users").then(function(j){ if(j&&j.ok&&j.users){ edUsers=j.users; renderTokens(); } }).catch(function(){}); }
+    edApi("tokens").then(function(j){
+      var toks=(j&&j.ok&&j.tokens)?j.tokens:[];
+      if(!toks.length){ list.innerHTML='<div class="ed-tk-empty">Токенов нет</div>'; return; }
+      var umap={}; edUsers.forEach(function(u){ umap[String(u.id)]=u.login; });
+      list.innerHTML=toks.map(function(t){
+        var who=umap[String(t.USER_ID)]||("#"+t.USER_ID);
+        return '<div class="ed-tk-item">'+
+          '<div class="ed-tk-info"><b>'+esc(t.TITLE)+'</b>'+
+          '<span class="ed-tk-badge '+(+t.CAN_CONTROL?"ctrl":"view")+'">'+(+t.CAN_CONTROL?"управление":"просмотр")+'</span>'+
+          '<span class="ed-tk-badge view">'+esc(who)+'</span>'+
+          '<span class="ed-tk-seen">'+esc(tokSeen(+t.LAST_SEEN))+'</span></div>'+
+          '<div class="ed-tk-act"><button class="ed-btn ed-tk-copy" data-tok="'+esc(t.TOKEN)+'">Ссылка</button>'+
+          '<button class="ed-btn ed-tk-rev" data-id="'+esc(t.ID)+'">Отозвать</button></div></div>';
+      }).join("");
+      list.querySelectorAll(".ed-tk-copy").forEach(function(b){
+        b.addEventListener("click",function(){ copyText(kioskLink(b.dataset.tok), b); });
+      });
+      list.querySelectorAll(".ed-tk-rev").forEach(function(b){
+        b.addEventListener("click",function(){ if(!confirm("Отозвать токен? Устройство перестанет работать.")) return;
+          edPost("token_revoke",{id:b.dataset.id}).then(function(){ renderTokens(); }); });
+      });
+    }).catch(function(){ list.innerHTML='<div class="ed-tk-empty">Не удалось загрузить</div>'; });
+
+    box.querySelector("#ed-tk-add").addEventListener("click",function(){
+      var t=box.querySelector("#ed-tk-title").value.trim();
+      var ctrl=box.querySelector("#ed-tk-ctrl").checked?1:0;
+      var us=box.querySelector("#ed-tk-user");
+      var uid=us?us.value:"0";
+      edPost("token_create",{title:t,can_control:ctrl,user:uid}).then(function(j){
+        if(j&&j.ok&&j.token){
+          var lk=box.querySelector("#ed-tk-newlink"); var url=kioskLink(j.token);
+          lk.style.display="block";
+          lk.innerHTML='Ссылка для устройства:<br><span class="ed-tk-url">'+esc(url)+'</span> <button class="ed-btn ed-tk-copy2">Копировать</button>';
+          lk.querySelector(".ed-tk-copy2").addEventListener("click",function(e){ copyText(url,e.target); });
+          box.querySelector("#ed-tk-title").value=""; box.querySelector("#ed-tk-ctrl").checked=false;
+          renderTokens();
+        } else flash((j&&j.error)?j.error:"Не удалось создать токен");
+      }).catch(function(){ flash("Ошибка создания токена"); });
+    });
+  }
+  function copyText(txt,btn){
+    var done=function(){ if(btn){ var o=btn.textContent; btn.textContent="✓"; setTimeout(function(){btn.textContent=o;},1200);} };
+    if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(txt).then(done,function(){ prompt("Скопируйте ссылку:",txt); }); }
+    else { prompt("Скопируйте ссылку:",txt); }
+  }
+  function wireEditor(){
+    var pt=document.getElementById("ed-paneltitle");
+    if(pt) pt.addEventListener("input",function(){ edModel.title=pt.value; });
+    var us=document.getElementById("ed-user");
+    if(us) us.addEventListener("change",function(){ edTargetUser=us.value; loadEditor(); });
+    var ha=document.getElementById("ed-hideall");
+    if(ha) ha.addEventListener("change",function(){ edModel.hideAll=ha.checked; });
+    edBody.querySelectorAll(".ed-rchip").forEach(function(ch){
+      ch.addEventListener("click",function(){ edRoomIdx=+ch.dataset.ri; renderEditor(); });
+    });
+    edBody.querySelectorAll(".ed-rtitle").forEach(function(inp){
+      inp.addEventListener("input",function(){
+        edModel.rooms[edRoomIdx].title=inp.value;
+        var chip=edBody.querySelector('.ed-rchip[data-ri="'+edRoomIdx+'"]');
+        if(chip) chip.textContent=inp.value||("Комната "+(edRoomIdx+1));
+      });
+    });
+    edBody.querySelectorAll(".ed-card [data-f]").forEach(function(el){
+      el.addEventListener("change",function(){
+        var ci=+el.closest(".ed-card").dataset.ci;
+        var card=edModel.rooms[edRoomIdx].cards[ci];
+        card[el.dataset.f]=el.value;
+        if(el.dataset.f==="object"||el.dataset.f==="type") renderEditor();
+      });
+    });
+    edBody.querySelectorAll(".ed-seg").forEach(function(seg){
+      var f=seg.dataset.f;
+      seg.querySelectorAll(".ed-segbtn").forEach(function(btn){
+        btn.addEventListener("click",function(){
+          var ci=+btn.closest(".ed-card").dataset.ci;
+          edModel.rooms[edRoomIdx].cards[ci][f]=btn.dataset.val;
+          seg.querySelectorAll(".ed-segbtn").forEach(function(x){x.classList.toggle("active",x===btn);});
+        });
+      });
+    });
+    edBody.querySelectorAll(".ed-multi").forEach(function(seg){
+      var f=seg.dataset.f;
+      seg.querySelectorAll(".ed-segbtn").forEach(function(btn){
+        btn.addEventListener("click",function(){
+          var ci=+btn.closest(".ed-card").dataset.ci, card=edModel.rooms[edRoomIdx].cards[ci];
+          var arr=(card[f]?String(card[f]).split(","):[]).filter(Boolean);
+          var v=btn.dataset.val, i=arr.indexOf(v);
+          if(i>=0) arr.splice(i,1); else arr.push(v);
+          card[f]=arr.join(",");
+          btn.classList.toggle("active");
+        });
+      });
+    });
+    edBody.querySelectorAll(".ed-moveto").forEach(function(msel){
+      msel.addEventListener("change",function(){
+        var target=parseInt(msel.value,10); if(isNaN(target))return;
+        var ci=+msel.dataset.ci;
+        var card=edModel.rooms[edRoomIdx].cards.splice(ci,1)[0];
+        if(card) edModel.rooms[target].cards.push(card);
+        renderEditor();
+      });
+    });
+    edBody.querySelectorAll("[data-act]").forEach(function(btn){
+      btn.addEventListener("click",function(){
+        var act=btn.dataset.act, cardEl=btn.closest(".ed-card");
+        var ci=cardEl?+cardEl.dataset.ci:-1, room=edModel.rooms[edRoomIdx];
+        if(act==="auto"){ doAutoLayout(); return; }
+        if(act==="rleft"){ if(edRoomIdx>0){ swap(edModel.rooms,edRoomIdx,edRoomIdx-1); edRoomIdx--; } else return; }
+        else if(act==="rright"){ if(edRoomIdx<edModel.rooms.length-1){ swap(edModel.rooms,edRoomIdx,edRoomIdx+1); edRoomIdx++; } else return; }
+        else if(act==="radd"){ edModel.rooms.push({id:"room"+Date.now(),title:"Новая комната",cards:[]}); edRoomIdx=edModel.rooms.length-1; }
+        else if(act==="rdel"){ if(confirm("Удалить комнату «"+(room?room.title:"")+"» со всеми карточками?")){ edModel.rooms.splice(edRoomIdx,1); edRoomIdx=Math.max(0,edRoomIdx-1); } else return; }
+        else if(act==="cadd") room.cards.push({object:"",type:"switch",title:"",icon:"dot"});
+        else if(act==="cdel") room.cards.splice(ci,1);
+        else if(act==="ccopy"){ edClipboard=JSON.parse(JSON.stringify(room.cards[ci])); renderEditor(); return; }
+        else if(act==="cpaste"){ if(!edClipboard) return; room.cards.splice(ci+1,0,JSON.parse(JSON.stringify(edClipboard))); }
+        else if(act==="cup"&&ci>0) swap(room.cards,ci,ci-1);
+        else if(act==="cdown"&&ci<room.cards.length-1) swap(room.cards,ci,ci+1);
+        else return;
+        renderEditor();
+      });
+    });
+  }
+
+  function openEditor(){ edTargetUser=MY_UID; loadEditor(); }
+  function loadEditor(){
+    edEl.classList.add("show"); updateScrollLock();
+    edBody.innerHTML='<div class="loading"><div class="dot live"></div>Загрузка…</div>';
+    var reqs=[edApi("config","&user="+encodeURIComponent(edTargetUser)),edApi("objects")];
+    if(IS_ADMIN){ reqs.push(edApi("settings")); reqs.push(edApi("users")); }
+    Promise.all(reqs).then(function(res){
+      var cfg=(res[0]&&res[0].ok&&res[0].config)?res[0].config:{rooms:[]};
+      edObjects=(res[1]&&res[1].ok&&res[1].objects)?res[1].objects:[];
+      if(IS_ADMIN && res[2] && res[2].ok) wsCfgUrl=res[2].ws_url||"";
+      if(IS_ADMIN && res[3] && res[3].ok && res[3].users) edUsers=res[3].users;
+      edModel=configToModel(cfg);
+      edRoomIdx=0;   // открыть ту комнату, что выбрана в панели
+      if(activeRoom && activeRoom!=="__all__"){
+        for(var i=0;i<edModel.rooms.length;i++){ if((edModel.rooms[i].id||edModel.rooms[i].title)===activeRoom){edRoomIdx=i;break;} }
+      }
+      renderEditor();
+    }).catch(function(){edBody.innerHTML='<div class="empty">Не удалось загрузить. Нужны SQLSelect и доступ к API.</div>';});
+  }
+  function closeEditor(){edEl.classList.remove("show"); updateScrollLock();}
+  if(TOKEN){ var _eb=document.getElementById("edit"); if(_eb) _eb.style.display="none";
+             var _sb=document.getElementById("settings"); if(_sb) _sb.style.display="none"; }   // киоск: без редактора и настроек
+  document.getElementById("edit").addEventListener("click",openEditor);
+  document.getElementById("settings").addEventListener("click",openSettings);
+  (function(){
+    var bell=document.getElementById("bell"); if(bell) bell.addEventListener("click",openChatBox);
+    var cc=document.getElementById("chat-close"); if(cc) cc.addEventListener("click",closeChatBox);
+    var cs=document.getElementById("chat-send"); if(cs) cs.addEventListener("click",sendChat);
+    var ct=document.getElementById("chat-text"); if(ct) ct.addEventListener("keydown",function(e){ if(e.key==="Enter"){ e.preventDefault(); sendChat(); } });
+    if(chatEl) chatEl.addEventListener("click",function(e){ if(e.target===chatEl) closeChatBox(); });
+  }());
+  document.getElementById("set-close").addEventListener("click",closeSettings);
+  document.getElementById("set-save").addEventListener("click",saveSettings);
+  document.getElementById("ed-close").addEventListener("click",closeEditor);
+
+  // ---- экспорт/импорт раскладки ----
+  document.getElementById("ed-export").addEventListener("click",function(){
+    var cfg=modelToConfig(edModel);
+    var blob=new Blob([JSON.stringify(cfg,null,2)],{type:"application/json"});
+    var url=URL.createObjectURL(blob), a=document.createElement("a");
+    var stamp=new Date().toISOString().slice(0,10);
+    a.href=url; a.download="lovelace-layout-"+stamp+".json";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){URL.revokeObjectURL(url);},1000);
+  });
+  document.getElementById("ed-import").addEventListener("click",function(){
+    document.getElementById("ed-file").value=""; document.getElementById("ed-file").click();
+  });
+  document.getElementById("ed-file").addEventListener("change",function(e){
+    var f=e.target.files&&e.target.files[0]; if(!f) return;
+    var rd=new FileReader();
+    rd.onload=function(){
+      var cfg; try{ cfg=JSON.parse(rd.result); }catch(err){ flash("Не удалось прочитать файл (не JSON)"); return; }
+      if(!cfg||!Array.isArray(cfg.rooms)){ flash("Это не похоже на раскладку (нет rooms)"); return; }
+      edModel=configToModel(cfg); edRoomIdx=0; renderEditor();
+      flash("Раскладка загружена — проверьте и нажмите «Сохранить»");
+    };
+    rd.onerror=function(){ flash("Ошибка чтения файла"); };
+    rd.readAsText(f);
+  });
+
+  document.getElementById("ed-save").addEventListener("click",function(){
+    edSave(modelToConfig(edModel)).then(function(j){
+      if(j&&j.ok){closeEditor(); refresh();}
+      else flash((j&&j.error)?j.error:"Не удалось сохранить");
+    }).catch(function(){flash("Ошибка сохранения");});
+  });
+
+  // ======================================================================
+  //  ДЕМО-ДАННЫЕ  (показываются только когда API недоступен)
+  // ======================================================================
+  var MOCK={ok:true,ts:0,rooms:[
+    {id:"living",title:"Гостиная",devices:[
+      {id:"HallLamp",title:"Люстра",icon:"bulb",controls:[{prop:"status",type:"switch",value:1}]},
+      {id:"HallDim",title:"Подсветка",icon:"bulb",controls:[{prop:"level",type:"slider",value:40,unit:"%",min:0,max:100,step:5}]},
+      {id:"HallTemp",title:"Температура",icon:"thermo",controls:[{prop:"value",type:"sensor",value:23.4,unit:"°C"}]},
+      {id:"HallMotion",title:"Движение",icon:"motion",controls:[{prop:"status",type:"text",value:"Тихо"}]}
+    ]},
+    {id:"kitchen",title:"Кухня",devices:[
+      {id:"KitLight",title:"Свет",icon:"bulb",controls:[{prop:"status",type:"switch",value:0}]},
+      {id:"KitHum",title:"Влажность",icon:"droplet",controls:[{prop:"value",type:"sensor",value:48,unit:"%"}]},
+      {id:"Kettle",title:"Чайник",icon:"power",controls:[{prop:"status",type:"switch",value:0},{prop:"boil",label:"Действие",type:"button",method:"boil",label:"Вскипятить"}]}
+    ]},
+    {id:"bedroom",title:"Спальня",devices:[
+      {id:"BedLamp",title:"Ночник",icon:"bulb",controls:[{prop:"status",type:"switch",value:0}]},
+      {id:"BedTemp",title:"Температура",icon:"thermo",controls:[{prop:"value",type:"sensor",value:21.8,unit:"°C"}]}
+    ]}
+  ]};
+  function mockSet(obj,prop,val){
+    MOCK.rooms.forEach(function(r){r.devices.forEach(function(d){
+      if(d.id===obj)d.controls.forEach(function(c){if(c.prop===prop)c.value=val;});});});
+  }
+})();
+</script>
+</body>
+</html>
