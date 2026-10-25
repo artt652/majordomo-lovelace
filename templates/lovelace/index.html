@@ -6,56 +6,11 @@
 <meta name="theme-color" content="#10131a">
 <title>Majordomo · Панель</title>
 <!--
-  ============================================================================
-  Majordomo Dashboard (Lovelace-style)  —  htdocs/tools/dashboard.html
-  ============================================================================
-  Полностью автономный файл: vanilla JS, без сборки, без внешних CDN,
-  без localStorage. Работает офлайн (важно для локального Android-устройства).
-  Отдаётся существующим lighttpd + php-cgi. Ядро Majordomo НЕ трогается.
-
-  --- КОНТРАКТ API (реализуется отдельно в dashboard_api.php) --------------
-  GET  dashboard_api.php?op=state
-    ->  {
-          "ok": true,
-          "ts": 1720000000,
-          "rooms": [
-            {
-              "id": "living",
-              "title": "Гостиная",
-              "devices": [
-                {
-                  "id": "HallLamp",           // имя ОБЪЕКТА Majordomo
-                  "title": "Люстра",
-                  "icon": "bulb",             // bulb|power|thermo|droplet|motion|dot
-                  "controls": [
-                    {
-                      "prop": "status",       // имя СВОЙСТВА объекта
-                      "label": "",            // подпись (для нескольких контролов)
-                      "type": "switch",       // switch|slider|sensor|text|button
-                      "value": 1,
-                      "unit": "",             // °C, %, W ...
-                      "min": 0, "max": 100, "step": 1,   // для slider
-                      "readonly": false,
-                      "method": ""            // для type=button: имя МЕТОДА объекта
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        }
-
-  POST dashboard_api.php?op=set     body: {"object":"HallLamp","property":"status","value":1}
-    ->  { "ok": true, "value": 1 }
-        ВАЖНО: запись ДОЛЖНА идти через setGlobal()/свойство объекта,
-        чтобы отработали связанные методы, сцены и история. Прямой
-        UPDATE в таблицу свойств ломает логику Majordomo — так нельзя.
-
-  POST dashboard_api.php?op=method  body: {"object":"HallLamp","method":"toggle","params":{}}
-    ->  { "ok": true }
-  --------------------------------------------------------------------------
-  Пока dashboard_api.php нет — панель сама переключается на демо-данные
-  (баннер вверху). Как только API появится, всё заработает без правок фронта.
+  Lovelace — панель управления для модуля MajorDoMo lovelace.
+  Vanilla JS, без сборки и внешних CDN. Открывается в iframe страницы модуля
+  (lovelace.html) или напрямую; киоск-режим — index.html?token=<токен>.
+  API: api.php/module/lovelace/<op>. Карточки — плагины из cards/index.json.
+  Если API недоступен — показываются демо-данные. Подробнее — README.md.
 -->
 <style>
   :root{
@@ -609,7 +564,7 @@
       css:function(text){ var s=document.createElement("style"); s.textContent=text; document.head.appendChild(s); }
     } };
 </script>
-<!-- Карточки не подключаются здесь: все внешние, грузятся из tools/cards/index.json -->
+<!-- Карточки не подключаются здесь: все внешние, грузятся из cards/index.json -->
 
 
 <script>
@@ -1294,7 +1249,7 @@
     wsSock.onerror=function(){ try{wsSock.close();}catch(e){} };
   }
 
-  // Все карточки — внешние (tools/cards/index.json). Первый рендер запускаем
+  // Все карточки — внешние (cards/index.json). Первый рендер запускаем
   // ПОСЛЕ загрузки карточек, чтобы типы уже были известны (без мигания).
   function startApp(){
     if(startApp.done) return; startApp.done=true;
@@ -1342,7 +1297,7 @@
   setTimeout(startApp, 2000);   // подстраховка: не ждать вечно, если манифест/карточка не ответили
 
   // ======================================================================
-  //  РЕДАКТОР ПАНЕЛИ  (пишет tools/dashboard.config.json)
+  //  РЕДАКТОР ПАНЕЛИ  (сохраняет раскладку через API save)
   // ======================================================================
   var edEl=document.getElementById("editor");
   var edBody=document.getElementById("ed-body");

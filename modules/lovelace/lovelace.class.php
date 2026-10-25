@@ -37,7 +37,7 @@ class lovelace extends module
     function run()
     {
         $out = array();
-        if ($this->action == 'admin') { $this->admin($out); } else { $this->usual($out); }
+        $this->usual($out);
         $this->data = $out;
         $p = new parser(DIR_TEMPLATES . $this->name . '/' . $this->name . '.html', $this->data, $this);
         $this->result = $p->result;
@@ -52,18 +52,6 @@ class lovelace extends module
         $out['WS_PORT']  = defined('WEBSOCKETS_PORT') ? WEBSOCKETS_PORT : 8001;
         $out['WS_PATH']  = '/majordomo';
         $out['WS_OFF']   = defined('DISABLE_WEBSOCKETS') ? 1 : 0;
-    }
-
-    function admin(&$out)
-    {
-        $this->getConfig();
-        if (gr('save_settings')) {
-            $this->config['WS_URL'] = trim((string)gr('ws_url'));
-            $this->saveConfig();
-            $out['SAVED'] = 1;
-        }
-        $out['WS_URL'] = htmlspecialchars(isset($this->config['WS_URL']) ? $this->config['WS_URL'] : '');
-        $out['ADMIN'] = 1;
     }
 
     /* =====================================================================
@@ -709,6 +697,7 @@ EOD;
             @SQLExec("ALTER TABLE lovelace_config CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
             @SQLExec("ALTER TABLE lovelace_calendar CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
             @SQLExec("ALTER TABLE lovelace_tokens CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+            @SQLExec("ALTER TABLE lovelace_devices CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
         }
     }
 

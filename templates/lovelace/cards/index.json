@@ -1,5 +1,5 @@
 {
-  "_help": "Манифест всех карточек. Каждый файл в tools/cards/ вызывает window.Lovelace.register(type, spec) и (при необходимости) Lovelace.util.css(...). Первый рендер панели ждёт загрузки этих файлов.",
+  "_help": "Манифест всех карточек. Каждый файл в cards/ вызывает window.Lovelace.register(type, spec) и (при необходимости) Lovelace.util.css(...). Первый рендер панели ждёт загрузки этих файлов.",
   "cards": [
     "switch.js",
     "slider.js",
