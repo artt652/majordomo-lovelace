@@ -18,8 +18,24 @@ Vanilla JS без сборки и внешних CDN, работает в лок
 
 ## Установка
 
-1. Скопировать `modules/`, `templates/` и `img/` в корень MajorDoMo.
-2. Открыть модуль в панели управления — при первом обращении он регистрируется и создаёт таблицы.
+Архив: [`alpha.tar.gz`](https://github.com/artt652/majordomo-lovelace/archive/alpha.tar.gz) (разработка) или [`main.tar.gz`](https://github.com/artt652/majordomo-lovelace/archive/main.tar.gz) (стабильная).
+
+### Через маркет
+
+Панель управления → «Маркет дополнений» → «Добавить/обновить вручную» → выбрать скачанный архив.
+Установщик скопирует файлы и создаст таблицы в БД.
+
+### Вручную
+
+1. Распаковать `modules/`, `templates/` и `img/` в корень MajorDoMo (`README.md` не нужен).
+2. Linux: файлы должны принадлежать пользователю веб-сервера (`www-data` в Debian / Raspberry Pi OS):
+   ```sh
+   cd /var/www/html   # корень MajorDoMo
+   sudo chown -R www-data:www-data modules/lovelace templates/lovelace img/modules/lovelace.png
+   sudo find modules/lovelace templates/lovelace -type d -exec chmod 755 {} +
+   sudo find modules/lovelace templates/lovelace img/modules/lovelace.png -type f -exec chmod 644 {} +
+   ```
+3. Панель управления → «Модули» → `lovelace` → «Re-install» — создаёт таблицы в БД.
 
 Требования: MajorDoMo с маршрутом `api.php/module/<name>/`, MySQL/MariaDB с поддержкой `utf8mb4`.
 
